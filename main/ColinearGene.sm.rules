@@ -1,0 +1,205 @@
+import os
+curDir = os.getcwd()
+include: "AssembleInfo.sm.rules"
+
+rule build_blast_db:
+    input:
+        iso_fa = rules.build_gene_ref_info.output.iso_fa,
+        cds_faa = rules.build_gene_ref_info.output.cds_faa,
+    output:
+        nucl_db = [os.path.join("analysis", "blastdb", "{{species}}", "{{database}}", "{{ref}}", "nucl.{suffix}").format(suffix=suffix) for suffix in ["nhr", "nin", "nsq"]],
+        prot_db = [os.path.join("analysis", "blastdb", "{{species}}", "{{database}}", "{{ref}}", "prot.{suffix}").format(suffix=suffix) for suffix in ["phr", "pin", "psq"]],
+    params:
+        job_name = "build_blast_db",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+        outfolder = os.path.join("analysis", "blastdb", "{species}", "{database}", "{ref}"),
+    shell:
+        """
+source activate py35
+makeblastdb -in {input.iso_fa} -dbtype nucl -title "{wildcards.ref} nucl" -parse_seqids -out {params.outfolder}/nucl
+makeblastdb -in {input.cds_faa} -dbtype prot -title "{wildcards.ref} prot" -parse_seqids -out {params.outfolder}/prot
+"""
+
+rule build_blast_db_new:
+    input:
+        genome_fa = rules.build_genome_info.output.genome,
+        iso_fa = rules.build_gene_ref_info.output.iso_fa,
+        cds_faa = rules.build_gene_ref_info.output.cds_faa,
+    output:
+        genome_db = [os.path.join("analysis", "blastdb_new", "{{species}}", "{{database}}", "{{ref}}", "genome.{suffix}").format(suffix=suffix) for suffix in ["nhr", "nin", "nsq"]],
+        trans_db = [os.path.join("analysis", "blastdb_new", "{{species}}", "{{database}}", "{{ref}}", "trans.{suffix}").format(suffix=suffix) for suffix in ["nhr", "nin", "nsq"]],
+        prot_db = [os.path.join("analysis", "blastdb_new", "{{species}}", "{{database}}", "{{ref}}", "prot.{suffix}").format(suffix=suffix) for suffix in ["phr", "pin", "psq"]],
+    params:
+        job_name = "build_blast_db",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+        outfolder = os.path.join("analysis", "blastdb_new", "{species}", "{database}", "{ref}"),
+    shell:
+        """
+source activate py35
+makeblastdb -in {input.genome_fa} -dbtype nucl -title "{wildcards.species} - {wildcards.database} - {wildcards.ref} genome" -parse_seqids -out {params.outfolder}/genome
+makeblastdb -in {input.iso_fa} -dbtype nucl -title "{wildcards.species} - {wildcards.database} - {wildcards.ref} transcript" -parse_seqids -out {params.outfolder}/trans
+makeblastdb -in {input.cds_faa} -dbtype prot -title "{wildcards.species} - {wildcards.database} - {wildcards.ref} protein" -parse_seqids -out {params.outfolder}/prot
+"""
+
+rule build_blast_db_new_tmp:
+    input:
+        expand_reference(rules.build_blast_db_new.output.genome_db[0]),
+
+fill_num = 10
+rule split_faa:
+    input:
+        cds_faa = rules.build_gene_ref_info.output.cds_faa,
+    output:
+        split_faa = [os.path.join("analysis", "split_faa", "{{species}}", "{{database}}", "{{ref}}", "{i}.fa").format(i=i) for i in range(fill_num)],
+    params:
+        job_name = "split_faa",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+        file_num = fill_num,
+        out_folder = os.path.join("analysis", "split_faa", "{species}", "{database}", "{ref}")
+    shell:
+        """
+source activate py35
+if [[ -e {params.out_folder} ]]; then
+    rm -rf {params.out_folder}
+fi
+mkdir {params.out_folder}
+SplitFa -i {input.cds_faa} -o {params.out_folder} -N {params.file_num} -m FileNum
+        """
+
+rule prot_pair_blast_worker:
+    input:
+        faa_query = os.path.join("analysis", "split_faa", "{species_q}", "{database_q}", "{ref_q}", "{i_q}.fa"),
+        db_ref = rules.build_blast_db.output,
+    output:
+        blast_out = os.path.join("analysis", "prot_pair_blast", "{species_q}_vs_{species}", "{database_q}_vs_{database}", "{ref_q}_vs_{ref}", "blast_result", "res.{i_q}.blast"),
+    params:
+        job_name = "prot_pair_blast_worker",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=4",
+        log = "log",
+        queue = "All",
+        blast_db=os.path.join("analysis", "blastdb", "{species}", "{database}", "{ref}", "prot"),
+    shell:
+        "blastp -query {input.faa_query} -out {output.blast_out} -db {params.blast_db} -evalue 1e-6 -outfmt 6 -num_threads 28 -max_hsps 10 -num_descriptions 10"
+
+rule prot_pair_blast:
+    input:
+        res = expand(os.path.join("analysis", "prot_pair_blast", "{{species_q}}_vs_{{species}}", "{{database_q}}_vs_{{database}}", "{{ref_q}}_vs_{{ref}}", "blast_result", "res.{i_q}.blast"), i_q=list(range(fill_num))),
+    output:
+        summary = os.path.join("analysis", "prot_pair_blast", "{species_q}_vs_{species}", "{database_q}_vs_{database}", "{ref_q}_vs_{ref}", "blast.out"),
+    params:
+        job_name = "prot_pair_blast",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+    shell:
+        "cat {input.res} > {output.summary}"
+        
+rule build_mcscan2_gff:
+    input:
+        query_cds = os.path.join("analysis", "genomeInfo", "{species_q}", "{database_q}", "{ref_q}", "cds.bed12"),
+        ref_cds = os.path.join("analysis", "genomeInfo", "{species}", "{database}", "{ref}", "cds.bed12"),
+    output:
+        gff = os.path.join("analysis", "mcscan2", "{species_q}_vs_{species}", "{database_q}_vs_{database}", "{ref_q}_vs_{ref}", "{ref_q}_{ref}.gff"),
+    params:
+        job_name = "build_mcscan2_gff",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+    shell:
+        """
+cat {input.query_cds} | awk '{{FS=OFS="\t"}}{{print "{wildcards.ref_q}."$1, $4, $2, $3}}' > {output.gff}.query
+cat {input.ref_cds} | awk '{{FS=OFS="\t"}}{{print "{wildcards.ref}."$1, $4, $2, $3}}' > {output.gff}.ref
+cat {output.gff}.query {output.gff}.ref > {output.gff}
+rm {output.gff}.query {output.gff}.ref
+        """
+
+rule merge_mcscan2_blast_res:
+    input:
+        r2r = os.path.join("analysis", "prot_pair_blast", "{species}_vs_{species}", "{database}_vs_{database}", "{ref}_vs_{ref}", "blast.out"),
+        q2q = os.path.join("analysis", "prot_pair_blast", "{species_q}_vs_{species_q}", "{database_q}_vs_{database_q}", "{ref_q}_vs_{ref_q}", "blast.out"),
+        q2r = os.path.join("analysis", "prot_pair_blast", "{species_q}_vs_{species}", "{database_q}_vs_{database}", "{ref_q}_vs_{ref}", "blast.out"),
+        r2q = os.path.join("analysis", "prot_pair_blast", "{species}_vs_{species_q}", "{database}_vs_{database_q}", "{ref}_vs_{ref_q}", "blast.out"),
+    output:
+        merge = os.path.join("analysis", "mcscan2", "{species_q}_vs_{species}", "{database_q}_vs_{database}", "{ref_q}_vs_{ref}", "{ref_q}_{ref}.blast"),
+    params:
+        job_name = "merge_mcscan2_blast_res",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+    shell:
+        """
+cat {input.r2r} {input.q2q} {input.q2r} {input.r2q} > {output.merge}
+        """
+
+rule mcscan2:
+    input:
+        gff = rules.build_mcscan2_gff.output.gff,
+        blast = rules.merge_mcscan2_blast_res.output.merge,
+    output:
+        res = os.path.join("analysis", "mcscan2", "{species_q}_vs_{species}", "{database_q}_vs_{database}", "{ref_q}_vs_{ref}", "{ref_q}_{ref}.collinearity"),
+    params:
+        job_name = "mcscan2",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+        curDir = curDir,
+        data_dir = os.path.join("analysis", "mcscan2", "{species_q}_vs_{species}", "{database_q}_vs_{database}", "{ref_q}_vs_{ref}"),
+        MCScanX = "/home/wangdehe/downloads/MCScanX/MCScanX",
+    shell:
+        """
+cd {params.data_dir}
+{params.MCScanX} {params.curDir}/{params.data_dir}/{wildcards.ref_q}_{wildcards.ref}
+        """
+
+rule scan_colinear_gene:
+    input:
+        query_cds = os.path.join("analysis", "genomeInfo", "{species_q}", "{database_q}", "{ref_q}", "cds.bed12"),
+        ref_cds = os.path.join("analysis", "genomeInfo", "{species}", "{database}", "{ref}", "cds.bed12"),
+        query_uniq_cds = os.path.join("analysis", "MergeGenomeInfo", "{species_q}", "{database_q}", "uniq_cds_map.tsv"),
+        ref_uniq_cds = os.path.join("analysis", "MergeGenomeInfo", "{species}", "{database}", "uniq_cds_map.tsv"),
+        query_uniq_locus = os.path.join("analysis", "MergeGenomeInfo", "{species_q}", "{database_q}", "gene_locus_map.tsv"),
+        ref_uniq_locus = os.path.join("analysis", "MergeGenomeInfo", "{species}", "{database}", "gene_locus_map.tsv"),
+        colinear = rules.mcscan2.output.res,
+        blast = rules.merge_mcscan2_blast_res.output.merge,
+    output:
+        homolog_cds = os.path.join("analysis", "colinear_homolog", "{species_q}_vs_{species}", "{database_q}_vs_{database}", "{ref_q}_vs_{ref}", "homolog.cds.tsv"),
+        homolog_locus = os.path.join("analysis", "colinear_homolog", "{species_q}_vs_{species}", "{database_q}_vs_{database}", "{ref_q}_vs_{ref}", "homolog.locus.tsv"),
+        colinear_pos = os.path.join("analysis", "colinear_homolog", "{species_q}_vs_{species}", "{database_q}_vs_{database}", "{ref_q}_vs_{ref}", "colinear.pos.tsv"),
+        colinear_locus = os.path.join("analysis", "colinear_homolog", "{species_q}_vs_{species}", "{database_q}_vs_{database}", "{ref_q}_vs_{ref}", "colinear.locus.tsv"),
+    params:
+        job_name = "scan_colinear_gene",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+        scan_colinear_gene = "python3 scripts/colinear_homolog/scan_colinear_gene.py",
+    shell:
+        """
+source activate py35
+{params.scan_colinear_gene} \
+    --ref1 {input.query_cds} --ref2 {input.ref_cds} \
+    --uniq-cds1 {input.query_uniq_cds} --uniq-cds2 {input.ref_uniq_cds} \
+    --uniq-locus1 {input.query_uniq_locus} --uniq-locus2 {input.ref_uniq_locus} \
+    --assemble1 {wildcards.ref_q} --assemble2 {wildcards.ref} \
+    --colinear {input.colinear} --blast {input.blast} \
+    --out-homolog-cds {output.homolog_cds} --out-homolog-locus {output.homolog_locus} \
+    --out-colinear-pos {output.colinear_pos}  --out-colinear-locus {output.colinear_locus}
+        """
+
+rule colinear_gene:
+    input:
+        expand_pair_reference(rules.scan_colinear_gene.output.homolog_cds),

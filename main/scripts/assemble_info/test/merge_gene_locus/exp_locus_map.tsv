@@ -1,0 +1,11 @@
+GeneLocus	Assemble	Tid
+test_Chr01_25600_29902_fwd	A1	A1_4_both
+test_Chr01_25600_29902_fwd	A2	A2_4_both
+test_Chr01_0_21639_rev	A1	A1_1_both
+test_Chr01_0_21639_rev	A1	A1_2_both
+test_Chr01_0_21639_rev	A1	A1_3_both
+test_Chr01_0_21639_rev	A2	A2_1_both
+test_Chr01_0_21639_rev	A2	A2_2_both
+test_Chr01_0_21639_rev	A2	A2_3_both
+test_Chr01_44698_47791_rev	A1	A1_5_uniq
+test_Chr01_55183_55826_rev	A2	A2_5_uniq

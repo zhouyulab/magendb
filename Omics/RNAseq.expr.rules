@@ -1,0 +1,564 @@
+import os
+
+# RNA-seq pipeline
+## Encode pipelines
+## Paired-end: https://www.encodeproject.org/pipelines/ENCPL002LPE/
+## Single-ended: https://www.encodeproject.org/pipelines/ENCPL002LSE/
+
+include: "Utils.rules"
+
+RNA_CFG = "RNA_seq.cfg"
+CurDir = os.getcwd()
+
+class RnaSeqCfg(object):
+    def __init__(self, line):
+        self.species, self.SRR, self.adapter5, self.adapter3, self.trim5, self.trim3, paired = line.rstrip().split("\t")
+        self.paired = paired == "TRUE"
+        self.rule = None
+
+    def get_raw_fastq(self):
+        if self.paired:
+            return [
+            "data/RNA_seq/fastq/{species}/{sample}_1.fastq.gz".format(species=self.species, sample=self.SRR), 
+            "data/RNA_seq/fastq/{species}/{sample}_2.fastq.gz".format(species=self.species, sample=self.SRR)
+            ]
+        else:
+            return [
+            "data/RNA_seq/fastq/{species}/{sample}.fastq.gz".format(species=self.species, sample=self.SRR)
+            ]
+
+    def get_clean_fastq(self):
+        if self.paired:
+            return [
+            "data/RNA_seq/clean/{species}/{sample}_1.fastq.gz".format(species=self.species, sample=self.SRR),
+            "data/RNA_seq/clean/{species}/{sample}_2.fastq.gz".format(species=self.species, sample=self.SRR)
+            ]
+        else:
+            return ["data/RNA_seq/clean/{species}/{sample}.fastq.gz".format(species=self.species, sample=self.SRR)]
+
+    def cutadapt_cmd(self, min_len=40):
+        raw_fq_li = self.get_raw_fastq()
+        clean_fq_li = self.get_clean_fastq()
+        cmd = ""
+
+        if any([self.adapter5, self.adapter3, self.trim5, self.trim3]):
+            if self.paired:
+                adp3 = ""
+                adp5 = ""
+                if self.adapter3:
+                    first_adp3, paired_adp3 = self.adapter3.split(",")
+                    adp3 = "-a {first_adp3} -A {paired_adp3}".format(first_adp3=first_adp3, paired_adp3=paired_adp3)
+                if self.adapter5:
+                    first_adp5, paired_adp5 = self.adapter5.split(",")
+                    adp5 = "-g {first_adp5} -G {paired_adp5}".format(first_adp5=first_adp5, paired_adp5=paired_adp5)
+
+                trim5 = ""
+                trim3 = ""
+                if self.trim5:
+                    first_trim5, paired_trim5 = self.trim5.split(",")
+                    trim5 = "-u {first_trim5} -U {paired_trim5}".format(first_trim5=first_trim5, paired_trim5=paired_trim5)
+                if self.trim3:
+                    first_trim3, paired_trim3 = self.trim3.split(",")
+                    trim3 = "-u -{first_trim3} -U -{paired_trim3}".format(first_trim3=first_trim3, paired_trim3=paired_trim3)
+
+
+                cmd = "cutadapt {adp3} {adp5} {trim5} {trim3} -m {min_len} -o {clean_R1} -p {clean_R2} {raw_R1} {raw_R2}".format(
+                    adp3=adp3, adp5=adp5, 
+                    trim5=trim5, trim3=trim3,
+                    min_len=min_len, 
+                    raw_R1=raw_fq_li[0],
+                    raw_R2=raw_fq_li[1],
+                    clean_R1=clean_fq_li[0],
+                    clean_R2=clean_fq_li[1]
+                    )
+            else:
+                adp3 = ""
+                adp5 = ""
+                if self.adapter3:
+                    adp3 = "-a " + self.adapter3
+                if self.adapter5:
+                    adp5 = "-g " + self.adapter5
+
+                trim5 = ""
+                trim3 = ""
+                if self.trim5:
+                    trim5 = "-u {trim5}".format(trim5=self.trim5)
+                if self.trim3:
+                    trim3 = "-u -{trim3}".format(trim3=self.trim3)
+                
+                cmd = "cutadapt {adp3} {adp5} {trim5} {trim3} -m {min_len} {raw_fq} -o {clean_fq} ".format(
+                    adp3=adp3, adp5=adp5, 
+                    trim5=trim5, trim3=trim3,
+                    min_len=min_len, 
+                    raw_fq=raw_fq_li[0],
+                    clean_fq=clean_fq_li[0]
+                    )
+        else:
+            for raw_fq, clean_fq in zip(raw_fq_li, clean_fq_li):
+                cmd += "ln -s {CurDir}/{raw_fq} {CurDir}/{clean_fq}\n".format(raw_fq=raw_fq, clean_fq=clean_fq, CurDir=CurDir)
+        return cmd
+
+def load_rna_seq_cfg(f_cfg):
+    cfg_li = list()
+    with open(f_cfg, "r") as f:
+        for indx, line in enumerate(f.readlines()):
+            if indx == 0:
+                continue
+            cfg_li.append(RnaSeqCfg(line))
+    return cfg_li
+
+cfg_rna_li = load_rna_seq_cfg(RNA_CFG)
+
+def find_cfg_by_srr(srr, cfg_rna_li):
+    for cfg in cfg_rna_li:
+        if cfg.SRR == srr:
+            return cfg
+    raise ValueError("Can not find configure about {0} !".format(srr))
+
+rule rna_seq_qc:
+    input:
+        raw_fq = lambda wildcards: find_cfg_by_srr(wildcards.sample, cfg_rna_li).get_raw_fastq(),
+    output:
+        dir = directory("data/RNA_seq/fastqc/{species}/{sample}"),
+    params:
+        job_name = "rna_seq_qc",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=4",
+        log = "log",
+        queue = "All",
+    shell:
+        """
+mkdir -p {output.dir}
+fastqc -t 4 -o {output.dir} {input.raw_fq}
+        """
+
+rule rna_seq_cutadapt:
+    input:
+        raw_fq = lambda wildcards: find_cfg_by_srr(wildcards.sample, cfg_rna_li).get_raw_fastq(),
+    output:
+        flag = touch("data/RNA_seq/clean/{species}/{sample}.flag"),
+    params:
+        job_name = "rna_seq_cutadapt",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+        cmd = lambda wildcards: find_cfg_by_srr(wildcards.sample, cfg_rna_li).cutadapt_cmd()
+    shell:
+        """
+{params.cmd}
+        """
+
+rule rna_seq_clean_qc:
+    input:
+        cutadapt_flag = rules.rna_seq_cutadapt.output.flag,
+    output:
+        dir = directory("data/RNA_seq/fastqc_clean/{species}/{sample}"),
+    params:
+        job_name = "rna_seq_clean_qc",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=4",
+        log = "log",
+        queue = "All",
+        fq = lambda wildcards: find_cfg_by_srr(wildcards.sample, cfg_rna_li).get_clean_fastq(),
+    shell:
+        """
+mkdir -p {output.dir}
+fastqc -t 4 -o {output.dir} {params.fq}
+        """
+
+rule rna_seq_clean_fq_stats:
+    input:
+        cutadapt_flag = rules.rna_seq_cutadapt.output.flag,
+    output:
+        txt = "data/RNA_seq/clean_fq_stats/{species}/{sample}/fq_stats.txt",
+    params:
+        job_name = "rna_seq_clean_fq_stats",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+        work_dir = "data/RNA_seq/clean_fq_stats/{species}/{sample}",
+        fq = lambda wildcards: find_cfg_by_srr(wildcards.sample, cfg_rna_li).get_clean_fastq(),
+    shell:
+        """
+if [[ -e {params.work_dir} ]]; then
+    rm -r {params.work_dir}
+fi
+mkdir -p {params.work_dir}
+sum_len=$(seqkit stats {params.fq} | sed 's/,//g' | awk '{{sum += $5}};END {{print sum/10^9}}')
+echo "{wildcards.sample}\t${{sum_len}}" > {output.txt}
+        """
+
+rule rna_seq_clean_fq_reads:
+    input:
+        cutadapt_flag = rules.rna_seq_cutadapt.output.flag,
+    output:
+        txt = "data/RNA_seq/clean_fq_stats/{species}/{sample}/fq_reads.txt",
+    params:
+        job_name = "rna_seq_clean_fq_reads",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+        work_dir = "data/RNA_seq/clean_fq_stats/{species}/{sample}",
+        fq = lambda wildcards: find_cfg_by_srr(wildcards.sample, cfg_rna_li).get_clean_fastq(),
+    shell:
+        """
+sum_len=$(seqkit stats {params.fq} | sed 's/,//g' | awk '{{sum += $4}};END {{print sum}}')
+echo "{wildcards.sample}\t${{sum_len}}" > {output.txt}
+        """
+
+rule rna_seq_star_mapping:
+    input:
+        cutadapt_flag = rules.rna_seq_cutadapt.output.flag,
+        gtf = rules.merge_genome_gtf.output.merge_gtf,
+    output:
+        bam = "data/RNA_seq/star/{species}/{genome}/{sample}/{sample}.sort.bam",
+    params:
+        job_name = "rna_seq_star_mapping",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=24",
+        log = "log",
+        queue = "All",
+        mapping_dir = "data/RNA_seq/star/{species}/{genome}/{sample}",
+        fq = lambda wildcards: find_cfg_by_srr(wildcards.sample, cfg_rna_li).get_clean_fastq(),
+        indx = "data/genomeInfo/star_indx/{species}/{genome}",
+    shell:
+        """
+if [[ -e {params.mapping_dir} ]]; then
+    rm -r {params.mapping_dir}
+fi
+mkdir -p {params.mapping_dir}
+STAR --runThreadN 24 \
+    --quantMode TranscriptomeSAM \
+    --genomeDir {params.indx} \
+    --sjdbGTFfile {input.gtf} \
+    --sjdbScore 1 \
+    --outFileNamePrefix {params.mapping_dir}/ \
+    --readFilesCommand zcat \
+    --readFilesIn {params.fq} \
+    --outSAMunmapped Within \
+    --outFilterType BySJout \
+    --outSAMattributes NH HI AS NM MD \
+    --outFilterMultimapNmax 20 \
+    --outFilterMismatchNmax 999 \
+    --outFilterMismatchNoverReadLmax 0.04 \
+    --alignIntronMin 20 \
+    --alignIntronMax 1000000 \
+    --alignMatesGapMax 1000000 \
+    --alignSJoverhangMin 8 \
+    --alignSJDBoverhangMin 1
+
+samtools sort -@ 24 -o {output.bam} {params.mapping_dir}/Aligned.out.sam
+rm {params.mapping_dir}/Aligned.out.sam
+# mv {params.mapping_dir}/Aligned.sortedByCoord.out.bam {output.bam}
+samtools index {output.bam}
+        """
+
+rule rna_seq_sn_qc:
+    input:
+        bam = rules.rna_seq_star_mapping.output.bam,
+        merge_bed = rules.merge_genome_bed.output.merge_bed,
+    output:
+        txt = "data/RNA_seq/sn_qc/{species}/{genome}/{sample}/sn_qc.txt",
+    params:
+        job_name = "rna_seq_sn_qc",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "all",
+        work_dir = "data/RNA_seq/sn_qc/{species}/{genome}/{sample}",
+    shell:
+        """
+if [[ -e {params.work_dir} ]]; then
+    rm -r {params.work_dir}
+fi
+mkdir -p {params.work_dir}
+read_distribution.py -i {input.bam} -r {input.merge_bed} > {output.txt}
+        """
+
+rule rna_seq_sn_count:
+    input:
+        txt = rules.rna_seq_sn_qc.output.txt,
+    output:
+        txt = "data/RNA_seq/sn_qc/{species}/{genome}/{sample}/sn_count.txt",
+    params:
+        job_name = "rna_seq_sn_count",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "all",
+    shell:
+        """
+sum_assign=$(cat {input.txt} | sed -n '/Assigned/p' | awk '{{print $4}}')
+sn=$(cat {input.txt} | sed -n '6,9p' | awk -vsa=${{sum_assign}} '{{sum += $3}};END {{print sum/(sa-sum)}}')
+echo "{wildcards.sample}\t${{sn}}" > {output.txt}
+        """
+
+rule rna_seq_bam2bw:
+    input:
+        bam = rules.rna_seq_star_mapping.output.bam,
+        merge_bed = rules.merge_genome_bed.output.merge_bed,
+        size = "data/genomeInfo/{species}/{genome}/chrom.size",
+    output:
+        flag = touch("data/RNA_seq/bw/{species}/{genome}/{sample}.flag"),
+    params:
+        job_name = "rna_seq_bam2bw",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "all",
+        total_sum = 1000000000,
+        work_dir = "data/RNA_seq/bw/{species}/{genome}",
+    shell:
+        """
+
+rule_text=$(infer_experiment.py -i {input.bam} -r {input.merge_bed} | grep -e "[+-]")
+
+indx=0
+for word in ${{rule_text[@]}}; do
+    let "indx = indx + 1"
+    if [[ ${{indx}} = 6 ]]; then
+        rule1=${{word:1:-2}}
+    elif [[ ${{indx}} = 7 ]]; then
+        score1=${{word}}
+    elif [[ ${{indx}} = 13 ]]; then
+        rule2=${{word:1:-2}}
+    elif [[ ${{indx}} = 14 ]]; then
+        score2=${{word}}
+    fi
+done
+
+if [[ `awk "BEGIN{{print(${{score1}}>${{score2}})?"1":"0"}}"` = 1 ]]; then
+    rule=${{rule1}}
+    score=${{score1}}
+    unrule_score=${{score2}}
+else
+    rule=${{rule2}}
+    score=${{score2}}
+    unrule_score=${{score1}}
+fi
+
+echo "file: {input.bam}  rule: ${{rule}}  score: ${{score}}"
+if [[ `awk "BEGIN{{print(${{score}}-${{unrule_score}}>0.3)?"1":"0"}}"` = 0 ]]; then
+    mode=1
+else
+    mode=2
+fi
+
+if [[ ${{mode}} = 1 ]]; then
+    bam2wig.py -t {params.total_sum} -s {input.size} -i {input.bam} -o {params.work_dir}/{wildcards.sample}
+    wigToBigWig -clip {params.work_dir}/{wildcards.sample}.wig {input.size} {params.work_dir}/{wildcards.sample}.bw
+    rm {params.work_dir}/{wildcards.sample}.wig
+else
+    bam2wig.py -t {params.total_sum} -s {input.size} -i {input.bam} -o {params.work_dir}/{wildcards.sample} -d "${{rule}}"
+    wigToBigWig -clip {params.work_dir}/{wildcards.sample}.Forward.wig {input.size} {params.work_dir}/{wildcards.sample}.Forward.bw
+    wigToBigWig -clip {params.work_dir}/{wildcards.sample}.Reverse.wig {input.size} {params.work_dir}/{wildcards.sample}.Reverse.bw
+    rm {params.work_dir}/{wildcards.sample}.Forward.wig {params.work_dir}/{wildcards.sample}.Reverse.wig
+fi
+        """
+
+rule rna_seq_stringtie:
+    input:
+        bam = rules.rna_seq_star_mapping.output.bam,
+        merge_bed = rules.merge_genome_bed.output.merge_bed,
+        locus_gtf = "data/MergeGenomeInfo/{species}/{genome}/gene_locus.gtf",
+    output:
+        gtf = "data/RNA_seq/locus_expr/{species}/{genome}/{sample}.gtf",
+        tab = "data/RNA_seq/locus_expr/{species}/{genome}/{sample}.tab",
+    params:
+        job_name = "rna_seq_stringtie",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=4",
+        log = "log",
+        queue = "all",
+    shell:
+        """
+rule_text=$(infer_experiment.py -i {input.bam} -r {input.merge_bed} | grep -e "[+-]")
+
+indx=0
+for word in ${{rule_text[@]}}; do
+    let "indx = indx + 1"
+    if [[ ${{indx}} = 6 ]]; then
+        rule1=${{word:1:-2}}
+    elif [[ ${{indx}} = 7 ]]; then
+        score1=${{word}}
+    elif [[ ${{indx}} = 13 ]]; then
+        rule2=${{word:1:-2}}
+    elif [[ ${{indx}} = 14 ]]; then
+        score2=${{word}}
+    fi
+done
+
+if [[ `awk "BEGIN{{print(${{score1}}>${{score2}})?"1":"0"}}"` = 1 ]]; then
+    rule=${{rule1}}
+    score=${{score1}}
+    unrule_score=${{score2}}
+else
+    rule=${{rule2}}
+    score=${{score2}}
+    unrule_score=${{score1}}
+fi
+
+echo "file: {input.bam}  rule: ${{rule}}  score: ${{score}}"
+if [[ `awk "BEGIN{{print(${{score}}-${{unrule_score}}>0.3)?"1":"0"}}"` = 0 ]]; then
+    mode=1
+else
+    mode=2
+fi
+
+if [[ ${{mode}} = 1 ]]; then
+    rule_parm=""
+else
+    if [[ ${{rule}} = "++,--" || ${{rule}} == "1++,1--,2+-,2-+" ]]; then
+        rule_parm="--rf"
+    else
+        rule_parm="--fr"
+    fi
+fi
+
+stringtie -p 4 ${{rule_parm}} -e -G {input.locus_gtf} -A {output.tab} -o {output.gtf} {input.bam}
+        """
+
+### call SNPs from RNA-seq bam-files
+
+gatk_tool = "~/miniconda3/envs/gatk/bin/gatk"
+
+rule add_RG:
+    input:
+        bam = rules.rna_seq_star_mapping.output.bam,
+    output:
+        rg_bam = "data/RNA_seq/star/{species}/{genome}/{sample}/{sample}_add_RG.sorted.bam",
+    params:
+        job_name = "add_RG",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "all",
+    shell:
+        """
+gatk AddOrReplaceReadGroups \
+    -I {input.bam} \
+    -O {output.rg_bam} \
+    -SO coordinate \
+    -RGID {wildcards.sample} \
+    -RGLB rna \
+    -RGPL illumina \
+    -RGPU hiseq \
+    -RGSM {wildcards.sample}
+        """
+
+rule rm_unmap:
+    input:
+        rg_bam = rules.add_RG.output.rg_bam,
+    output:
+        ru_bam = "data/RNA_seq/star/{species}/{genome}/{sample}/{sample}_rm_unmap.bam",
+    params:
+        job_name = "rm_unmap",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=7",
+        log = "log",
+        queue = "all",
+    shell:
+        """
+samtools view -@ 7 -F 77 -F 141 -b -o {output.ru_bam} {input.rg_bam}
+        """
+
+rule split_CigarReads:
+    input:
+        rg_bam = rules.rm_unmap.output.ru_bam,
+        fa = "data/genomeInfo/{species}/{genome}/genome.fa",
+    output:
+        bam = "data/RNA_seq/star/{species}/{genome}/{sample}/{sample}_split.sorted.bam",
+    params:
+        job_name = "split_CigarReads",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "all",
+        tmp_dir = "data/RNA_seq/star/{species}/{genome}/{sample}/tmp",
+    shell:
+        """
+if [[ -e {params.tmp_dir} ]]; then
+    rm -r {params.tmp_dir}
+fi
+mkdir -p {params.tmp_dir}
+gatk SplitNCigarReads \
+    -R {input.fa} \
+    -I {input.rg_bam} \
+    -O {output.bam} \
+    --tmp-dir {params.tmp_dir}
+        """
+
+rule HC_call:
+    input:
+        fasta = "data/genomeInfo/{species}/{genome}/genome.fa",
+        split_bam = rules.split_CigarReads.output.bam,
+    output:
+        vcf = "data/RNA_seq/gatk/{species}/{genome}/{sample}.vcf",
+    params:
+        job_name = "HC_call",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "all",
+        output_dir = "data/RNA_seq/gatk/{species}/{genome}",
+        tmp_dir = "data/RNA_seq/gatk/{species}/{genome}/tmp"
+    shell:
+        """
+if [[ ! -e {params.output_dir} ]]; then
+    mkdir -p {params.output_dir}
+fi
+if [[ -e {params.tmp_dir} ]]; then
+    rm -r {params.tmp_dir}
+fi
+mkdir -p {params.tmp_dir}
+gatk HaplotypeCaller \
+    -R {input.fasta} \
+    -I {input.split_bam} \
+    --dont-use-soft-clipped-bases \
+    -O {output.vcf} \
+    --tmp-dir {params.tmp_dir}
+        """
+
+rule HC_call:
+    input:
+        fasta = "data/genomeInfo/{species}/{genome}/genome.fa",
+        split_bam = rules.split_CigarReads.output.bam,
+    output:
+        vcf = "data/RNA_seq/gatk/{species}/{genome}/{sample}.vcf",
+    params:
+        job_name = "HC_call",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "all",
+        output_dir = "data/RNA_seq/gatk/{species}/{genome}",
+        tmp_dir = "data/RNA_seq/gatk/{species}/{genome}/tmp"
+    shell:
+        """
+
+        """
+
+def expand_sample(ruleStr, cfg_rna_li, genome_cfg):
+    res_res = list()
+    for cfg in cfg_rna_li:
+        species = cfg.species
+        for genome in genome_cfg[species].keys():
+            res_res.append(ruleStr.format(species=species, sample=cfg.SRR, genome=genome))
+    return res_res
+
+rule rna_seq:
+    input:
+        # expand_sample(rules.rna_seq_qc.output.dir, cfg_rna_li, genome_dict),
+        # expand_sample(rules.rna_seq_clean_qc.output.dir, cfg_rna_li, genome_dict),
+        # expand_sample(rules.rna_seq_clean_fq_stats.output.txt, cfg_rna_li, genome_dict),
+        # expand_sample(rules.rna_seq_clean_fq_reads.output.txt, cfg_rna_li, genome_dict),
+        # expand_sample(rules.rna_seq_star_mapping.output.bam, cfg_rna_li, genome_dict),
+        # expand_sample(rules.rna_seq_sn_count.output.txt, cfg_rna_li, genome_dict),
+        # expand_sample(rules.rna_seq_bam2bw.output.flag, cfg_rna_li, genome_dict),
+        # expand_sample(rules.rna_seq_stringtie.output.tab, cfg_rna_li, genome_dict),
+        # expand_sample(rules.add_RG.output.rg_bam, cfg_rna_li, genome_dict),
+        expand_sample(rules.split_CigarReads.output.bam, cfg_rna_li, genome_dict),
+        expand_sample(rules.HC_call.output.vcf, cfg_rna_li, genome_dict)

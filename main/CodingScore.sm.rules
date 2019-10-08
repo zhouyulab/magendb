@@ -1,0 +1,91 @@
+import os
+curDir = os.getcwd()
+include: "AssembleInfo.sm.rules"
+
+rule cpat_pick_at_rna:
+    input:
+        "/home/wangdehe/common/NCBI/genomes/Arabidopsis_thaliana/GCA_000001735.1_TAIR10_genomic.gbff"
+    output:
+        mrna = os.path.join("analysis", "coding_score", "data", "At", "mrna.fa"),
+        ncrna = os.path.join("analysis", "coding_score", "data", "At", "ncrna.fa"),
+    params:
+        job_name = "cpat_pick_at_rna",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+    priority: 80
+    shell:
+        """
+source activate py35
+genbank2rna -i {input} --mrna {output.mrna} --ncrna {output.ncrna}
+        """
+
+rule cpat_make_at_hexamer:
+    input:
+        mrna = rules.cpat_pick_at_rna.output.mrna,
+        ncrna = rules.cpat_pick_at_rna.output.ncrna,
+    output:
+        os.path.join("analysis", "coding_score", "data", "At", "rna.hexamer"),
+    params:
+        job_name = "cpat_make_at_hexamer",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+    priority: 80
+    shell:
+        """
+source activate py35
+make_hexamer_tab.py -c {input.mrna} -n {input.ncrna} > {output}
+        """
+
+rule cpat_make_at_logitModel:
+    input:
+        mrna = rules.cpat_pick_at_rna.output.mrna,
+        ncrna = rules.cpat_pick_at_rna.output.ncrna,
+        hexamer = rules.cpat_make_at_hexamer.output,
+    output:
+        os.path.join("analysis", "coding_score", "data", "At", "rna.mode.logit.RData"),
+    params:
+        job_name = "cpat_make_at_logitModel",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+        model_name = os.path.join("analysis", "coding_score", "data", "At", "rna.mode"),
+    priority: 80
+    shell:
+        """
+source activate py35
+make_logitModel.py -c {input.mrna} -n {input.ncrna} -x {input.hexamer} -o {params.model_name}
+        """
+
+rule cpat_worker:
+    input:
+        iso = rules.build_gene_ref_info.output.bed12,
+        genome = lambda wildcards: get_genome_file(wildcards.species, wildcards.database),
+        hexamer = rules.cpat_make_at_hexamer.output,
+        model = rules.cpat_make_at_logitModel.output,
+    output:
+        res = os.path.join("analysis", "coding_score", "res", "{species}", "{database}", "{ref}", "cpat.out.tsv"),
+    params:
+        job_name = "cpat_worker",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+        work_folder = os.path.join("analysis", "coding_score", "res", "{species}", "{database}", "{ref}"),
+    priority: 80
+    shell:
+        """
+if [[ ! -e {params.work_folder} ]]; then
+    mkdir {params.work_folder}
+fi
+cpat.py -g {input.iso} -x {input.hexamer} -d {input.model} -r {input.genome} -o {output.res}
+        """
+
+
+rule cpat:
+    input:
+        expand_reference(rules.cpat_worker.output.res)

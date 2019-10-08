@@ -1,0 +1,5 @@
+GeneLocus	Chrom	Start	End	Strand	DomainAssemble	DomainTid
+test_Chr01_25600_29902_fwd	Chr01	25600	29902	+	A2	A2_4_both
+test_Chr01_0_21639_rev	Chr01	0	21639	-	A2	A2_1_both
+test_Chr01_44698_47791_rev	Chr01	44698	47791	-	A1	A1_5_uniq
+test_Chr01_55183_55826_rev	Chr01	55183	55826	-	A2	A2_5_uniq

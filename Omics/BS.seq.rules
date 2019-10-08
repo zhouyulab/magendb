@@ -1,0 +1,332 @@
+import os
+
+# BS-seq pipeline
+## Encode pipelines
+## Paired-end: https://github.com/ENCODE-DCC/dna-me-pipeline
+
+include: "Utils.rules"
+
+RNA_CFG = "BS_seq.cfg"
+CurDir = os.getcwd()
+
+class RnaSeqCfg(object):
+    def __init__(self, line):
+        self.species, self.SRR, self.adapter5, self.adapter3, self.trim5, self.trim3, paired = line.rstrip().split("\t")
+        self.paired = paired == "TRUE"
+        self.rule = None
+
+    def get_raw_fastq(self):
+        if self.paired:
+            return [
+            "data/BS_seq/fastq/{species}/{sample}_1.fastq.gz".format(species=self.species, sample=self.SRR), 
+            "data/BS_seq/fastq/{species}/{sample}_2.fastq.gz".format(species=self.species, sample=self.SRR)
+            ]
+        else:
+            return [
+            "data/BS_seq/fastq/{species}/{sample}.fastq.gz".format(species=self.species, sample=self.SRR)
+            ]
+
+    def get_clean_fastq(self):
+        if self.paired:
+            return [
+            "data/BS_seq/clean/{species}/{sample}_1.fastq.gz".format(species=self.species, sample=self.SRR),
+            "data/BS_seq/clean/{species}/{sample}_2.fastq.gz".format(species=self.species, sample=self.SRR)
+            ]
+        else:
+            return ["data/BS_seq/clean/{species}/{sample}.fastq.gz".format(species=self.species, sample=self.SRR)]
+
+    def cutadapt_cmd(self, min_len=40):
+        raw_fq_li = self.get_raw_fastq()
+        clean_fq_li = self.get_clean_fastq()
+        cmd = ""
+
+        if any([self.adapter5, self.adapter3, self.trim5, self.trim3]):
+            if self.paired:
+                adp3 = ""
+                adp5 = ""
+                if self.adapter3:
+                    first_adp3, paired_adp3 = self.adapter3.split(",")
+                    adp3 = "-a {first_adp3} -A {paired_adp3}".format(first_adp3=first_adp3, paired_adp3=paired_adp3)
+                if self.adapter5:
+                    first_adp5, paired_adp5 = self.adapter5.split(",")
+                    adp5 = "-g {first_adp5} -G {paired_adp5}".format(first_adp5=first_adp5, paired_adp5=paired_adp5)
+
+                trim5 = ""
+                trim3 = ""
+                if self.trim5:
+                    first_trim5, paired_trim5 = self.trim5.split(",")
+                    trim5 = "-u {first_trim5} -U {paired_trim5}".format(first_trim5=first_trim5, paired_trim5=paired_trim5)
+                if self.trim3:
+                    first_trim3, paired_trim3 = self.trim3.split(",")
+                    trim3 = "-u -{first_trim3} -U -{paired_trim3}".format(first_trim3=first_trim3, paired_trim3=paired_trim3)
+
+
+                cmd = "cutadapt {adp3} {adp5} {trim5} {trim3} -m {min_len} -o {clean_R1} -p {clean_R2} {raw_R1} {raw_R2}".format(
+                    adp3=adp3, adp5=adp5, 
+                    trim5=trim5, trim3=trim3,
+                    min_len=min_len, 
+                    raw_R1=raw_fq_li[0],
+                    raw_R2=raw_fq_li[1],
+                    clean_R1=clean_fq_li[0],
+                    clean_R2=clean_fq_li[1]
+                    )
+            else:
+                adp3 = ""
+                adp5 = ""
+                if self.adapter3:
+                    adp3 = "-a " + self.adapter3
+                if self.adapter5:
+                    adp5 = "-g " + self.adapter5
+
+                trim5 = ""
+                trim3 = ""
+                if self.trim5:
+                    trim5 = "-u {trim5}".format(trim5=self.trim5)
+                if self.trim3:
+                    trim3 = "-u -{trim3}".format(trim3=self.trim3)
+                
+                cmd = "cutadapt {adp3} {adp5} {trim5} {trim3} -m {min_len} {raw_fq} -o {clean_fq} ".format(
+                    adp3=adp3, adp5=adp5, 
+                    trim5=trim5, trim3=trim3,
+                    min_len=min_len, 
+                    raw_fq=raw_fq_li[0],
+                    clean_fq=clean_fq_li[0]
+                    )
+        else:
+            for raw_fq, clean_fq in zip(raw_fq_li, clean_fq_li):
+                cmd += "ln -s {CurDir}/{raw_fq} {CurDir}/{clean_fq}\n".format(raw_fq=raw_fq, clean_fq=clean_fq, CurDir=CurDir)
+        return cmd
+
+def load_rna_seq_cfg(f_cfg):
+    cfg_li = list()
+    with open(f_cfg, "r") as f:
+        for indx, line in enumerate(f.readlines()):
+            if indx == 0:
+                continue
+            cfg_li.append(RnaSeqCfg(line))
+    return cfg_li
+
+cfg_rna_li = load_rna_seq_cfg(RNA_CFG)
+
+def find_cfg_by_srr(srr, cfg_rna_li):
+    for cfg in cfg_rna_li:
+        if cfg.SRR == srr:
+            return cfg
+    raise ValueError("Can not find configure about {0} !".format(srr))
+
+rule bs_seq_qc:
+    input:
+        raw_fq = lambda wildcards: find_cfg_by_srr(wildcards.sample, cfg_rna_li).get_raw_fastq(),
+    output:
+        dir = directory("data/BS_seq/fastqc/{species}/{sample}"),
+    params:
+        job_name = "bs_seq_qc",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=4",
+        log = "log",
+        queue = "All",
+    shell:
+        """
+mkdir -p {output.dir}
+fastqc -t 4 -o {output.dir} {input.raw_fq}
+        """
+
+rule bs_seq_cutadapt:
+    input:
+        raw_fq = lambda wildcards: find_cfg_by_srr(wildcards.sample, cfg_rna_li).get_raw_fastq(),
+    output:
+        flag = touch("data/BS_seq/clean/{species}/{sample}.flag"),
+    params:
+        job_name = "bs_seq_cutadapt",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+        cmd = lambda wildcards: find_cfg_by_srr(wildcards.sample, cfg_rna_li).cutadapt_cmd()
+    shell:
+        """
+{params.cmd}
+        """
+
+rule bs_seq_clean_qc:
+    input:
+        cutadapt_flag = rules.bs_seq_cutadapt.output.flag,
+    output:
+        dir = directory("data/BS_seq/fastqc_clean/{species}/{sample}"),
+    params:
+        job_name = "bs_seq_clean_qc",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=4",
+        log = "log",
+        queue = "All",
+        fq = lambda wildcards: find_cfg_by_srr(wildcards.sample, cfg_rna_li).get_clean_fastq(),
+    shell:
+        """
+mkdir -p {output.dir}
+fastqc -t 4 -o {output.dir} {params.fq}
+        """
+
+rule bs_seq_clean_fq_stats:
+    input:
+        cutadapt_flag = rules.bs_seq_cutadapt.output.flag,
+    output:
+        txt = "data/BS_seq/clean_fq_stats/{species}/{sample}/fq_stats.txt",
+    params:
+        job_name = "bs_seq_clean_fq_stats",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+        work_dir = "data/BS_seq/clean_fq_stats/{species}/{sample}",
+        fq = lambda wildcards: find_cfg_by_srr(wildcards.sample, cfg_rna_li).get_clean_fastq(),
+    shell:
+        """
+if [[ -e {params.work_dir} ]]; then
+    rm -r {params.work_dir}
+fi
+mkdir -p {params.work_dir}
+sum_len=$(seqkit stats {params.fq} | sed 's/,//g' | awk '{{sum += $5}};END {{print sum/10^9}}')
+echo "{wildcards.sample}\t${{sum_len}}" > {output.txt}
+        """
+
+rule bs_seq_clean_fq_reads:
+    input:
+        cutadapt_flag = rules.bs_seq_cutadapt.output.flag,
+    output:
+        txt = "data/BS_seq/clean_fq_stats/{species}/{sample}/fq_reads.txt",
+    params:
+        job_name = "bs_seq_clean_fq_reads",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+        work_dir = "data/BS_seq/clean_fq_stats/{species}/{sample}",
+        fq = lambda wildcards: find_cfg_by_srr(wildcards.sample, cfg_rna_li).get_clean_fastq(),
+    shell:
+        """
+sum_len=$(seqkit stats {params.fq} | sed 's/,//g' | awk '{{sum += $4}};END {{print sum}}')
+echo "{wildcards.sample}\t${{sum_len}}" > {output.txt}
+        """
+
+
+rule bismark_mapping:
+    input:
+        cutadapt_flag = rules.bs_seq_cutadapt.output.flag,
+    output:
+        bam = "data/BS_seq/mapping/{species}/{genome}/{sample}/{sample}_1_bismark_bt2_pe.bam",
+    params:
+        job_name = "bismark_mapping",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=24",
+        log = "log",
+        queue = "All",
+        fq_1 = lambda wildcards: find_cfg_by_srr(wildcards.sample, cfg_rna_li).get_clean_fastq()[0],
+        fq_2 = lambda wildcards: find_cfg_by_srr(wildcards.sample, cfg_rna_li).get_clean_fastq()[1],
+        indx_dir = "data/genomeInfo/{species}/{genome}",
+        out_dir = "data/BS_seq/mapping/{species}/{genome}/{sample}",
+        temp_dir = "data/BS_seq/mapping_temp/{species}/{genome}/{sample}",
+    shell:
+        """
+if [[ -e {params.temp_dir} ]]; then
+    rm -rf {params.temp_dir}
+fi
+mkdir -p {params.temp_dir}
+bismark --bowtie2 \
+    --parallel 24 \
+    -N 1 \
+    -L 28 \
+    --genome {params.indx_dir} \
+    -1 {params.fq_1} \
+    -2 {params.fq_2} \
+    -o {params.out_dir} \
+    --temp_dir {params.temp_dir} \
+    --unmapped
+        """
+
+rule bismark_dedup:
+    input:
+        bam = rules.bismark_mapping.output.bam,
+    output:
+        dedup_bam = "data/BS_seq/mapping/{species}/{genome}/{sample}/{sample}_1_bismark_bt2_pe.deduplicated.bam",
+    params:
+        job_name = "bismark_dedup",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+        out_dir = "data/BS_seq/mapping/{species}/{genome}/{sample}",
+    shell:
+        """
+deduplicate_bismark --bam --output_dir {params.out_dir} {input.bam}
+        """
+
+rule bismark_met_extract:
+    input:
+        bam = rules.bismark_dedup.output.dedup_bam,
+    output:
+        bg = "data/BS_seq/met_extract/{species}/{genome}/{sample}/{sample}_1_bismark_bt2_pe.deduplicated.bedGraph.gz",
+    params:
+        job_name = "bismark_met_extract",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=10",
+        log = "log",
+        queue = "All",
+        indx_dir = "data/genomeInfo/{species}/{genome}",
+        out_dir = "data/BS_seq/met_extract/{species}/{genome}/{sample}",
+    shell:
+        """
+bismark_methylation_extractor \
+    --parallel 10 \
+    --comprehensive \
+    --cytosine_report \
+    --CX_context \
+    --bedGraph \
+    -o {params.out_dir} \
+    --zero_based \
+    --genome_folder {params.indx_dir} \
+    {input.bam}
+        """
+
+rule bedGraph_to_bw:
+    input:
+        bg = rules.bismark_met_extract.output.bg,
+        size = "data/genomeInfo/{species}/{genome}/chrom.size",
+    output:
+        pos_bg = "data/BS_seq/bw/{species}/{genome}/{sample}.sort.bedGraph",
+        pos_bw = "data/BS_seq/bw/{species}/{genome}/{sample}.bw",
+    params:
+        job_name = "bedGraph_to_bw",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+        out_dir = "data/BS_seq/bw/{species}/{genome}",
+        cm_bg = "data/BS_seq/bw/{species}/{genome}/{sample}.bedGraph.gz",
+        ex_bg = "data/BS_seq/bw/{species}/{genome}/{sample}.bedGraph",
+    shell:
+        """
+export LC_COLLATE=C
+mkdir -p {params.out_dir}
+cp {input.bg} {params.cm_bg}
+gzip -d {params.cm_bg}
+sed -i '1d' {params.ex_bg}
+sort -k1,1 -k2,2n {params.ex_bg} > {output.pos_bg}
+bedGraphToBigWig {output.pos_bg} {input.size} {output.pos_bw}
+        """
+
+def expand_sample(ruleStr, cfg_rna_li, genome_cfg):
+    res_res = list()
+    for cfg in cfg_rna_li:
+        species = cfg.species
+        for genome in genome_cfg[species].keys():
+            res_res.append(ruleStr.format(species=species, sample=cfg.SRR, genome=genome))
+    return res_res
+
+rule bs_seq:
+    input:
+        expand_sample(rules.bs_seq_qc.output.dir, cfg_rna_li, genome_dict),
+        expand_sample(rules.bs_seq_clean_qc.output.dir, cfg_rna_li, genome_dict),
+        expand_sample(rules.bs_seq_clean_fq_stats.output.txt, cfg_rna_li, genome_dict),
+        expand_sample(rules.bs_seq_clean_fq_reads.output.txt, cfg_rna_li, genome_dict),
+        expand_sample(rules.bismark_met_extract.output.bg, cfg_rna_li, genome_dict),
+        expand_sample(rules.bedGraph_to_bw.output.pos_bw, cfg_rna_li, genome_dict)

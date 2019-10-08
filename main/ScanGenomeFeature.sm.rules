@@ -1,0 +1,150 @@
+import os
+curDir = os.getcwd()
+include: "AssembleInfo.sm.rules"
+
+rule rfam:
+    input:
+        size = rules.build_genome_info.output.chromSize,
+        genome = rules.build_genome_info.output.genome,
+        rfam_clanin = "/home/wangdehe/common/Rfam/Rfam.clanin",
+        rfam_cm = "/home/wangdehe/common/Rfam/Rfam.cm"
+    output:
+        tbl = os.path.join("analysis", "Rfam", "{species}", "{database}", "Rfam.tbl"),
+        cmscan = os.path.join("analysis", "Rfam", "{species}", "{database}", "Rfam.cmscan"),
+    params:
+        job_name = "rfam",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=14",
+        log = "log",
+        queue = "All",
+    shell:
+        """
+source activate py35
+tmp=$(cat {input.size} | awk 'BEGIN{{cumSum=0}}{{cumSum=cumSum+$2}}END{{print cumSum*2/1000000}}')
+cmscan -Z ${{tmp}} --cut_ga --cpu 28 --rfam --nohmmonly --tblout {output.tbl} --fmt 2 --clanin {input.rfam_clanin} {input.rfam_cm} {input.genome} > {output.cmscan}
+        """
+
+rule summary_rfam:
+    input:
+        res = rules.rfam.output.tbl,
+        size = rules.build_genome_info.output.chromSize,
+    output:
+        genome_bed = os.path.join("analysis", "Rfam", "{species}", "{database}", "Rfam.genome.bed6"),
+        genome_bb = os.path.join("analysis", "Rfam", "{species}", "{database}", "Rfam.genome.bb6"),
+    params:
+        job_name = "summary_rfam",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+    priority: 80
+    shell:
+        r"""
+export LC_COLLATE=C
+cat {input.res} | awk '{{OFS="\t"}}{{tag=substr($1,1,1); if(tag!="#"){{if($12=="+"){{print $4,$10,$11,$2,0,$12}}else{{print $4,$11,$10,$2,0,$12}} }}}}' | sort -S 2G -k 1,1 -k 2,2n -u  > {output.genome_bed}
+bedToBigBed -type=bed6 {output.genome_bed} {input.size} {output.genome_bb}
+        """
+
+rule filter_rfam_result:
+    input:
+        tbl = rules.rfam.output.tbl,
+        size = rules.build_genome_info.output.chromSize,
+    output:
+        filtered_tbl = os.path.join("analysis", "Rfam", "{species}", "{database}", "Rfam.filter.tbl"),
+        genome_bed = os.path.join("analysis", "Rfam", "{species}", "{database}", "Rfam.genome.filter.bed6"),
+        genome_bb = os.path.join("analysis", "Rfam", "{species}", "{database}", "Rfam.genome.filter.bb6"),
+    params:
+        job_name = "filter_rfam_result",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+        filter_Rfam_result = "python3 scripts/genome_feature/filter_Rfam_result.py"
+    shell:
+        r"""
+export LC_COLLATE=C
+source activate py35
+{params.filter_Rfam_result} -i {input.tbl} -o {output.filtered_tbl}
+cat {output.filtered_tbl} | awk '{{OFS="\t"}}{{tag=substr($1,1,1); if(tag!="#"){{if($12=="+"){{print $4,$10,$11,$2,0,$12}}else{{print $4,$11,$10,$2,0,$12}} }}}}' | sort -S 2G -k 1,1 -k 2,2n -u  > {output.genome_bed}
+bedToBigBed -type=bed6 {output.genome_bed} {input.size} {output.genome_bb}
+        """
+
+rule fetch_rfam_sequence:
+    input:
+        bed = rules.filter_rfam_result.output.genome_bed,
+        genome = rules.build_genome_info.output.genome,
+    output:
+        fa = os.path.join("analysis", "Rfam", "{species}", "{database}", "Rfam.genome.filter.fa"),
+    params:
+        job_name = "fetch_rfam_sequence",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+    shell:
+        r"""
+bedtools getfasta -fullHeader -name+ -s -fi {input.genome} -bed {input.bed} -fo {output.fa}
+        """
+
+rule trnascan:
+    input:
+        genome = rules.build_genome_info.output.genome,
+        size = rules.build_genome_info.output.chromSize,
+    output:
+        out = os.path.join("analysis", "tRNAscan", "{species}", "{database}", "tRNAscan.out"),
+        bed = os.path.join("analysis", "tRNAscan", "{species}", "{database}", "tRNAscan.bed12"),
+        bb = os.path.join("analysis", "tRNAscan", "{species}", "{database}", "tRNAscan.bb12"),
+        struct = os.path.join("analysis", "tRNAscan", "{species}", "{database}", "tRNAscan.struct"),
+        fasta = os.path.join("analysis", "tRNAscan", "{species}", "{database}", "tRNAscan.fa"),
+        summary = os.path.join("analysis", "tRNAscan", "{species}", "{database}", "tRNAscan.stat"),
+    params:
+        job_name = "trnascan",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=14",
+        log = "log",
+        queue = "All",
+        tRNAscan = "/home/wangdehe/software/tRNAscan/bin/tRNAscan-SE",
+        outdir = os.path.join("analysis", "tRNAscan", "{species}", "{database}"),
+    shell:
+        r"""
+export LC_COLLATE=C
+if [[ -e {params.outdir} ]]; then
+    rm -rf {params.outdir}
+fi
+mkdir -p {params.outdir}
+{params.tRNAscan} -E -o {output.out} -f {output.struct} -b {output.bed}.tmp -a {output.fasta} -m {output.summary} --thread 28 {input.genome}
+cat {output.bed}.tmp | sort -k 1,1 -k 2,2n > {output.bed}
+bedToBigBed -type=bed12 {output.bed} {input.size} {output.bb}
+rm {output.bed}.tmp
+        """
+
+rule genome_tandem_repeat_trf:
+    input:
+        genome = rules.build_genome_info.output.genome,
+    output:
+        tag = touch(os.path.join("analysis", "GenomeTandemRepeat", "{species}", "{database}", "trf.tag"))
+    params:
+        job_name = "tandem_repeat_trf",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+        out_folder = os.path.join("analysis", "GenomeTandemRepeat", "{species}", "{database}"),
+        input_abs = os.path.join(curDir, rules.build_genome_info.output.genome)
+    priority: 30
+    shell:
+        """
+source activate py35
+if [[ -e {params.out_folder} ]]; then
+    rm -rf {params.out_folder}
+fi
+mkdir -p {params.out_folder}
+cd {params.out_folder}
+trf {params.input_abs} 2 7 7 80 10 50 1000
+        """
+
+rule scan_genome_feature:
+    input:
+        expand_genome(rules.fetch_rfam_sequence.output.fa),
+        expand_genome(rules.trnascan.output.bb),
+        expand_genome(rules.genome_tandem_repeat_trf.output.tag),

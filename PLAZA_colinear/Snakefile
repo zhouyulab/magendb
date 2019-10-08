@@ -1,0 +1,226 @@
+import os
+curDir = os.getcwd()
+PLAZA_SPECIES = {
+    "dicots": [
+        "aip", "aly", "ath", "atr", "bol", "bra", "bvu", "car", "ccaj", "ccl",
+        "cla", "cme", "col", "cpa", "cqu", "cre", "cru", "egr", "egut", "fve", "gma",
+        "hbr", "mes", "mtr", "nnu", "osa", "pab", "pax", "pbr", "ppa", "ppe",
+        "ptr", "sly", "stu", "tha", "tpr", "ugi", "vra", "vvi", "zju", "zma"
+    ], "monocots": [
+        "atr", "bdi", "cre", "egu", "hvu", "obr", "osaindica", "osa", "oth", "pab",
+        "ped", "ppa", "ptr", "sbi", "sit", "sly", "tae", "vvi", "zma", "zosmarina"
+    ]
+}
+ALL_PLAZA_SPECIES = sorted(set(PLAZA_SPECIES["dicots"]) | set(PLAZA_SPECIES["monocots"]))
+
+SPECIES = ["bomCei", "durZib", "gosArb", "gosBar", "gosHir", "gosRai", "theCac"]
+GENOME = {
+    "bomCei": [{"genome": "gigadb", "reference": ["gigadb"]}],
+    "durZib": [{"genome": "ncbi_1.0", "reference": ["ncbi_1.0"]}],
+    "gosArb": [{"genome": "CGP", "reference": ["IGIA", "CGP"]}],
+    "gosBar": [{"genome": "HAU_v2.0", "reference": ["HAU_v1.0"]}],
+    "gosHir": [
+        {"genome": "JGI_1.1", "reference": ["JGI_1.1"]},
+        {"genome": "BGI_1.0", "reference": ["BGI_1.0"]},
+        ],
+    "gosRai": [
+        {"genome": "JGI_v2.0", "reference": ["JGI_v2.1"]},
+        {"genome": "BGI_CGP_1.0", "reference": ["BGI_CGP_1.0"]},
+        ],
+    "theCac": [{"genome": "cocoa_v2", "reference": ["cocoa_v2"]}],
+}
+
+COTWEB_BASE = "/home/wangdehe/data/CotWeb"
+
+def find_plaza_db(species):
+    assert species in ALL_PLAZA_SPECIES
+    if species in PLAZA_SPECIES["dicots"]:
+        return "dicots"
+    else:
+        return "monocots"
+
+def find_plaza_file(species, file_type):
+    db = find_plaza_db(species)
+    base_dir = os.path.join("/home/wangdehe/common/PLAZA", "plaza_public_{DB}_04").format(DB=db)
+    assert file_type in ["genome_fa", "genome_2bit", "chrom_size", "gtf", "iso", "iso_fa", "cds", "cds_fa", "cds_faa"]
+    if file_type == "genome_fa":
+        f = os.path.join(base_dir, "Genomes", "{species}.con").format(species=species)
+    elif file_type == "genome_2bit":
+        f = os.path.join(base_dir, "2bit", "{species}.2bit").format(species=species)
+    elif file_type == "chrom_size":
+        f = os.path.join(base_dir, "chrom_size", "{species}.chrom.sizes").format(species=species)
+    elif file_type == "gtf":
+        f = os.path.join(base_dir, "gene_info", "{species}", "{species}.gtf").format(species=species)
+    elif file_type == "iso":
+        f = os.path.join(base_dir, "gene_info", "{species}", "{species}.iso.bed12").format(species=species)
+    elif file_type == "iso_fa":
+        f = os.path.join(base_dir, "gene_info", "{species}", "{species}.iso.fa").format(species=species)
+    elif file_type == "cds":
+        f = os.path.join(base_dir, "gene_info", "{species}", "{species}.cds.bed12").format(species=species)
+    elif file_type == "cds_fa":
+        f = os.path.join(base_dir, "gene_info", "{species}", "{species}.cds.fa").format(species=species)
+    elif file_type == "cds_faa":
+        f = os.path.join(base_dir, "gene_info", "{species}", "{species}.cds.faa").format(species=species)
+    else:
+        raise ValueError()
+    return f
+
+def find_cotweb_file(species, genome, assemble, file_type):
+    assert file_type in ["blast_db", "self_blast", "faa", "cds"]
+    if file_type == "blast_db":
+        f = os.path.join(COTWEB_BASE, "analysis", "blastdb", "{species}", "{database}", "{ref}", "prot").format(species=species, database=genome, ref=assemble)
+    elif file_type == "self_blast":
+        f = os.path.join(COTWEB_BASE, "analysis", "prot_pair_blast", "{species}_vs_{species}", "{database}_vs_{database}", "{ref}_vs_{ref}", "blast.out").format(species=species, database=genome, ref=assemble)
+    elif file_type == "faa":
+        f = os.path.join(COTWEB_BASE, "analysis", "genomeInfo", "{species}", "{database}", "{ref}", "cds.faa")
+    elif file_type == "cds":
+        f = os.path.join(COTWEB_BASE, "analysis", "genomeInfo", "{species}", "{database}", "{ref}", "cds.bed12")
+    else:
+        raise ValueError()
+    return f
+
+rule build_plaza_blastdb:
+    input:
+        cds_faa = lambda wildcards: find_plaza_file(wildcards.plaza_species, "cds_faa")
+    output:
+        prot_db = [os.path.join("analysis", "plaza_blastdb", "{{plaza_species}}", "prot.{suffix}").format(suffix=suffix) for suffix in ["phr", "pin", "psq"]],
+    params:
+        job_name = "build_plaza_blastdb",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+        outfolder = os.path.join("analysis", "plaza_blastdb", "{plaza_species}"),
+    shell:
+        """
+source activate py35
+makeblastdb -in {input.cds_faa} -dbtype prot -title "{wildcards.plaza_species} prot" -parse_seqids -out {params.outfolder}/prot
+"""
+
+rule plaza_self_blast:
+    input:
+        cds_faa = lambda wildcards: find_plaza_file(wildcards.plaza_species, "cds_faa"),
+        flag = rules.build_plaza_blastdb.output,
+    output:
+        blast_out = os.path.join("analysis", "plaza_self_blast", "{plaza_species}.blast"),
+    params:
+        job_name = "plaza_self_blast",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=4",
+        log = "log",
+        queue = "All",
+        blast_db= os.path.join("analysis", "plaza_blastdb", "{plaza_species}", "prot"),
+    shell:
+        "blastp -query {input.cds_faa} -out {output.blast_out} -db {params.blast_db} -evalue 1e-6 -outfmt 6 -num_threads 28 -max_hsps 10 -num_descriptions 10"
+
+rule plaza2cotweb_blast:
+    input:
+        cds_faa = lambda wildcards: find_plaza_file(wildcards.plaza_species, "cds_faa"),
+    output:
+        blast_out = os.path.join("analysis", "plaza2cotweb_blastdb", "{plaza_species}_vs_{species}", "{database}", "{ref}.blast"),
+    params:
+        job_name = "plaza2cotweb_blast",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=4",
+        log = "log",
+        queue = "All",
+        blast_db= lambda wildcards: find_cotweb_file(wildcards.species, wildcards.database, wildcards.ref, "blast_db"),
+    shell:
+        "blastp -query {input.cds_faa} -out {output.blast_out} -db {params.blast_db} -evalue 1e-6 -outfmt 6 -num_threads 28 -max_hsps 10 -num_descriptions 10"
+
+rule cotweb2plaza_blast:
+    input:
+        cds_faa = lambda wildcards: find_cotweb_file(wildcards.species, wildcards.database, wildcards.ref, "faa"),
+    output:
+        blast_out = os.path.join("analysis", "cotweb2plaza_blastdb", "{species}_vs_{plaza_species}", "{database}", "{ref}.blast"),
+    params:
+        job_name = "cotweb2plaza_blast",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=4",
+        log = "log",
+        queue = "All",
+        blast_db= os.path.join("analysis", "plaza_blastdb", "{plaza_species}", "prot"),
+    shell:
+        "blastp -query {input.cds_faa} -out {output.blast_out} -db {params.blast_db} -evalue 1e-6 -outfmt 6 -num_threads 28 -max_hsps 10 -num_descriptions 10"
+
+rule build_mcscan2_gff:
+    input:
+        cotweb_cds = lambda wildcards: find_cotweb_file(wildcards.species, wildcards.database, wildcards.ref, "cds"),
+        plaza_cds = lambda wildcards: find_plaza_file(wildcards.plaza_species, "cds"),
+    output:
+        gff = os.path.join("analysis", "mcscan2", "{plaza_species}_vs_{species}", "{database}", "{ref}", "{ref}.gff"),
+    params:
+        job_name = "build_mcscan2_gff",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+    shell:
+        """
+cat {input.cotweb_cds} | awk '{{FS=OFS="\t"}}{{print "{wildcards.ref}."$1, $4, $2, $3}}' > {output.gff}.query
+cat {input.plaza_cds} | awk '{{FS=OFS="\t"}}{{print "{wildcards.plaza_species}."$1, $4, $2, $3}}' > {output.gff}.ref
+cat {output.gff}.query {output.gff}.ref > {output.gff}
+rm {output.gff}.query {output.gff}.ref
+        """
+
+rule merge_mcscan2_blast_res:
+    input:
+        c2c = lambda wildcards: find_cotweb_file(wildcards.species, wildcards.database, wildcards.ref, "self_blast"),
+        p2p = rules.plaza_self_blast.output.blast_out,
+        c2p = rules.cotweb2plaza_blast.output.blast_out,
+        p2c = rules.plaza2cotweb_blast.output.blast_out,
+    output:
+        merge = os.path.join("analysis", "mcscan2", "{plaza_species}_vs_{species}", "{database}", "{ref}", "{ref}.blast"),
+    params:
+        job_name = "merge_mcscan2_blast_res",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+    shell:
+        """
+cat {input.c2c} {input.p2p} {input.c2p} {input.p2c} > {output.merge}
+        """
+
+rule mcscan2:
+    input:
+        gff = rules.build_mcscan2_gff.output.gff,
+        blast = rules.merge_mcscan2_blast_res.output.merge,
+    output:
+        res = os.path.join("analysis", "mcscan2", "{plaza_species}_vs_{species}", "{database}", "{ref}", "{ref}.collinearity"),
+    params:
+        job_name = "mcscan2",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+        curDir = curDir,
+        data_dir = os.path.join("analysis", "mcscan2", "{plaza_species}_vs_{species}", "{database}", "{ref}"),
+        MCScanX = "/home/wangdehe/downloads/MCScanX/MCScanX",
+    shell:
+        """
+cd {params.data_dir}
+{params.MCScanX} {params.curDir}/{params.data_dir}/{wildcards.ref}
+        """
+
+def get_genome_name(species):
+    return [x["genome"] for x in GENOME[species]]
+
+def get_ref_name(species, database):
+    for data in GENOME[species]:
+        if data["genome"] == database:
+            return data["reference"]
+
+def expand_all(ruleStr):
+    res = list()
+    for plaza_species in ALL_PLAZA_SPECIES:
+        for tmp_species in SPECIES:
+            for tmp_genome in get_genome_name(tmp_species):
+                for ref in get_ref_name(tmp_species, tmp_genome):
+                    res.append(ruleStr.format(plaza_species=plaza_species, species=tmp_species, database=tmp_genome, ref=ref))
+    return res
+
+rule all:
+    input:
+        expand_all(rules.mcscan2.output.res),
+

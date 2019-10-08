@@ -1,0 +1,156 @@
+import os
+curDir = os.getcwd()
+include: "AssembleInfo.sm.rules"
+include: "ColinerGene.sm.rules"
+
+rule ppi_string2plants_prot_pair_blast:
+    input:
+        string_faa = lambda wildcards: find_string_faa(wildcards.string_species),
+        plants_blast_db = rules.build_blast_db.output,
+    output:
+        blast_out = os.path.join("analysis", "PPI_network", "pair_blast", "string2plants", "{string_species}_vs_{species}", "{database}", "{ref}.blast"),
+    params:
+        job_name = "ppi_string2plants_prot_pair_blast",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=4",
+        log = "log",
+        queue = "All",
+        blast_db=os.path.join("analysis", "blastdb", "{species}", "{database}", "{ref}", "prot"),
+    shell:
+        "blastp -query {input.string_faa} -out {output.blast_out} -db {params.blast_db} -evalue 1e-6 -outfmt 6 -num_threads 28 -max_hsps 10 -num_descriptions 10"
+
+rule ppi_plants2string_prot_pair_blast:
+    input:
+        plants_faa = rules.build_gene_ref_info.output.cds_faa,
+    output:
+        blast_out = os.path.join("analysis", "PPI_network", "pair_blast", "plants2string", "{species}_vs_{string_species}", "{database}", "{ref}.blast"),
+    params:
+        job_name = "ppi_plants2string_prot_pair_blast",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=4",
+        log = "log",
+        queue = "All",
+        blast_db = lambda wildcards: find_string_blast_db(wildcards.string_species),
+    shell:
+        "blastp -query {input.plants_faa} -out {output.blast_out} -db {params.blast_db} -evalue 1e-6 -outfmt 6 -num_threads 28 -max_hsps 10 -num_descriptions 10"
+
+rule ppi_string2string_prot_pair_blast:
+    input:
+        plants_faa = lambda wildcards: find_string_faa(wildcards.string_species),
+    output:
+        blast_out = os.path.join("analysis", "PPI_network", "pair_blast", "string2string", "{string_species}_vs_{string_species}.blast"),
+    params:
+        job_name = "ppi_plants2string_prot_pair_blast",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=4",
+        log = "log",
+        queue = "All",
+        blast_db = lambda wildcards: find_string_blast_db(wildcards.string_species),
+    shell:
+        "blastp -query {input.plants_faa} -out {output.blast_out} -db {params.blast_db} -evalue 1e-6 -outfmt 6 -num_threads 28 -max_hsps 10 -num_descriptions 10"
+
+rule merge_ppi_mcscan2_blast_res:
+    input:
+        p2p = os.path.join("analysis", "prot_pair_blast", "{species}_vs_{species}", "{database}_vs_{database}", "{ref}_vs_{ref}", "blast.out"),
+        s2s = os.path.join("analysis", "PPI_network", "pair_blast", "string2string", "{string_species}_vs_{string_species}.blast"),
+        s2p = os.path.join("analysis", "PPI_network", "pair_blast", "string2plants", "{string_species}_vs_{species}", "{database}", "{ref}.blast"),
+        p2s = os.path.join("analysis", "PPI_network", "pair_blast", "plants2string", "{species}_vs_{string_species}", "{database}", "{ref}.blast"),
+    output:
+        merge = os.path.join("analysis", "PPI_network", "mcscan2", "{string_species}_vs_{species}", "{database}", "{string_species}_{ref}", "{string_species}_{ref}.blast"),
+    params:
+        job_name = "merge_ppi_mcscan2_blast_res",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+    shell:
+        """
+cat {input.p2p} {input.s2s} {input.s2p} {input.p2s} > {output.merge}
+        """
+
+rule build_ppi_mcscan2_gff:
+    input:
+        plant_cds = os.path.join("analysis", "genomeInfo", "{species}", "{database}", "{ref}", "cds.bed12"),
+        string_cds = lambda wildcards: find_string_mcscan_gff(wildcards.string_species),
+    output:
+        gff = os.path.join("analysis", "PPI_network", "mcscan2", "{string_species}_vs_{species}", "{database}", "{string_species}_{ref}", "{string_species}_{ref}.gff"),
+    params:
+        job_name = "build_ppi_mcscan2_gff",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+    shell:
+        """
+cat {input.plant_cds} | awk '{{FS=OFS="\t"}}{{print $1, $4, $2, $3}}' > {output.gff}
+cat {input.string_cds} >> {output.gff}
+        """
+
+rule ppi_mcscan2:
+    input:
+        gff = rules.build_ppi_mcscan2_gff.output.gff,
+        blast = rules.merge_ppi_mcscan2_blast_res.output.merge,
+    output:
+        res = os.path.join("analysis", "PPI_network", "mcscan2", "{string_species}_vs_{species}", "{database}", "{string_species}_{ref}", "{string_species}_{ref}.collinearity"),
+    params:
+        job_name = "ppi_mcscan2",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+        curDir = curDir,
+        data_dir = os.path.join("analysis", "PPI_network", "mcscan2", "{string_species}_vs_{species}", "{database}", "{string_species}_{ref}"),
+        MCScanX = "/home/wangdehe/downloads/MCScanX/MCScanX",
+    shell:
+        """
+cd {params.data_dir}
+{params.MCScanX} {params.curDir}/{params.data_dir}/{wildcards.string_species}_{wildcards.ref}
+        """
+
+rule trans_ppi_info:
+    input:
+        plant_cds = os.path.join("analysis", "genomeInfo", "{species}", "{database}", "{ref}", "cds.bed12"),
+        string_cds = lambda wildcards: find_string_mcscan_gff(wildcards.string_species),
+        coliner = rules.ppi_mcscan2.output.res,
+        ppi = lambda wildcards: find_string_ppi(wildcards.string_species),
+    output:
+        trans = os.path.join("analysis", "PPI_network", "mcscan2", "{string_species}_vs_{species}", "{database}", "{string_species}_{ref}", "{string_species}_{ref}.trans.tsv"),
+    params:
+        job_name = "trans_ppi_info",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+        trans_ppi_info = "python scripts/ppi/trans_ppi_info.py",
+    shell:
+        """
+source activate py35
+cat {input.plant_cds} | awk '{{FS=OFS="\t"}}{{print $1, $4, $2, $3}}' > {output.trans}.tmp.ref
+{params.trans_ppi_info} --coliner {input.coliner} --ppi {input.ppi} --string-ref {input.string_cds} --plant-ref {output.trans}.tmp.ref -o {output.trans}
+rm {output.trans}.tmp.ref
+        """
+
+rule merge_ppi_score:
+    input:
+        score = lambda wildcards: [rules.trans_ppi_info.output.trans.format(species=wildcards.species, database=wildcards.database, string_species=string_species, ref=ref) for string_species in STRING_DB.keys() for ref in get_ref_name(wildcards.species, wildcards.database)],
+        locus_map = rules.merge_gene_locus.output.gene_locus_map,
+    output:
+        protein_ppi = os.path.join("analysis", "PPI_network", "merge_score", "{species}", "{database}", "PPI.protein.tsv"),
+        locus_ppi = os.path.join("analysis", "PPI_network", "merge_score", "{species}", "{database}", "PPI.locus.tsv"),
+    params:
+        job_name = "merge_ppi_score",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+        assemble = lambda wildcards: [ref for string_species in STRING_DB.keys() for ref in get_ref_name(wildcards.species, wildcards.database)],
+        merge_ppi_score = "python scripts/ppi/merge_ppi_score.py",
+    shell:
+        """
+source activate py35
+{params.merge_ppi_score} -i {input.score} --assemble {params.assemble} --uniq-locus-map {input.locus_map} --out-prot {output.protein_ppi} --out-locus {output.locus_ppi}
+        """
+
+rule ppi:
+    input:
+        expand_genome(rules.merge_ppi_score.output.locus_ppi)

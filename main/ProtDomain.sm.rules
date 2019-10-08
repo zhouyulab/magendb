@@ -1,0 +1,315 @@
+import os
+curDir = os.getcwd()
+include: "AssembleInfo.sm.rules"
+
+rule interpro_scan:
+    input:
+        cds_faa = rules.build_gene_ref_info.output.cds_faa
+    output:
+        res = os.path.join("analysis", "Interpro", "{species}", "{database}", "{ref}", "interpro.tsv"),
+    params:
+        job_name = "interpro_scan",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=28",
+        log = "log",
+        queue = "all",
+        interpro = "/opt/software/interproscan-5.34-73.0/interproscan.sh",
+        output_name = os.path.join("analysis", "Interpro", "{species}", "{database}", "{ref}", "interpro"),
+    shell:
+        r"""
+source activate py27
+cat {input.cds_faa}  <(echo -e "\n") | sed ':a;N;s/\*//g;ta' | tr -s '\n' > {params.output_name}.tmp.faa
+{params.interpro} -i {params.output_name}.tmp.faa -b {params.output_name} --goterms --pathways --cpu 28
+rm {params.output_name}.tmp.faa
+        """
+
+rule summary_interpro_scan:
+    input:
+        interpro = rules.interpro_scan.output.res,
+        cds = rules.build_gene_ref_info.output.cds_bed12,
+        size = rules.build_genome_info.output.chromSize,
+    output:
+        bed12 = os.path.join("analysis", "Interpro", "{species}", "{database}", "{ref}", "interpro.bed12"),
+        bb12 = os.path.join("analysis", "Interpro", "{species}", "{database}", "{ref}", "interpro.bb12"),
+    params:
+        job_name = "summary_interpro_scan",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+    shell:
+        """
+export LC_COLLATE=C
+source activate py35
+interpro2bed12 -i {input.interpro} -r {input.cds} -o {output.bed12}.tmp
+sort -S 2G -k 1,1 -k 2,2n -k 3,3n {output.bed12}.tmp > {output.bed12}
+rm {output.bed12}.tmp
+bedToBigBed -type=bed12 {output.bed12} {input.size} {output.bb12}
+        """ 
+
+rule cdd:
+    input:
+        cds_faa = rules.build_gene_ref_info.output.cds_faa,
+    output:
+        res = os.path.join("analysis", "NCBI_CDD", "{species}", "{database}", "{ref}", "cds.out"),
+    params:
+        job_name = "cdd",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=14",
+        log = "log",
+        queue = "All",
+        blastdb = "/home/wangdehe/common/NCBI/CDD/blastdb/Cdd_NCBI",
+    shell:
+        "rpsblast -query {input.cds_faa} -out {output.res} -db {params.blastdb} -evalue 1e-6 -outfmt 5 -num_threads 28"
+
+rule summary_cdd:
+    input:
+        res = rules.cdd.output.res,
+        cds = rules.build_gene_ref_info.output.cds_bed12,
+        size = rules.build_genome_info.output.chromSize,
+    output:
+        cds_stat = os.path.join("analysis", "NCBI_CDD", "{species}", "{database}", "{ref}", "CDD.cds.tsv"),
+        genome_bed = os.path.join("analysis", "NCBI_CDD", "{species}", "{database}", "{ref}", "CDD.genome.bed12"),
+        genome_bb = os.path.join("analysis", "NCBI_CDD", "{species}", "{database}", "{ref}", "CDD.genome.bb12"),
+    params:
+        job_name = "summary_cdd",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+        summary_blast_out = "python scripts/gene_annotation/summary_blast_out.py",
+    shell:
+        """
+export LC_COLLATE=C
+source activate py35
+{params.summary_blast_out} -i {input.res} -o {output.cds_stat}
+blast2bed12 --blast-out {input.res} --ref {input.cds} -o {output.genome_bed}.tmp --mode query
+sort -S 2G -k 1,1 -k 2,2n -k 3,3n {output.genome_bed}.tmp > {output.genome_bed}
+bedToBigBed -type=bed12 {output.genome_bed} {input.size} {output.genome_bb}
+rm {output.genome_bed}.tmp
+        """ 
+
+rule pfam:
+    input:
+        cds_faa = rules.build_gene_ref_info.output.cds_faa,
+    output:
+        res = os.path.join("analysis", "Pfam", "{species}", "{database}", "{ref}", "Pfam.tbl"),
+    params:
+        job_name = "pfam",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+        pfam_scan = "$HOME/downloads/PfamScan/pfam_scan.pl",
+        pfam_data = "$HOME/downloads/PfamScan/data",
+    shell:
+        "{params.pfam_scan} -dir {params.pfam_data} -fasta {input.cds_faa} -outfile {output.res}"
+
+rule pfam2bed:
+    input:
+        res = rules.pfam.output.res,
+        cds = rules.build_gene_ref_info.output.cds_bed12,
+        size = rules.build_genome_info.output.chromSize,
+    output:
+        genome_bed = os.path.join("analysis", "Pfam", "{species}", "{database}", "{ref}", "Pfam.genome.bed12"),
+        genome_bb = os.path.join("analysis", "Pfam", "{species}", "{database}", "{ref}", "Pfam.genome.bb12"),
+    params:
+        job_name = "pfam2bed",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+        summary_pfam_results = "python scripts/prot_domain/summary_pfam_results.py",
+    shell:
+        """
+export LC_COLLATE=C
+source activate py35
+{params.summary_pfam_results} -i {input.res} -r {input.cds} -o {output.genome_bed}.tmp
+sort -S 2G -k 1,1 -k 2,2n -k 3,3n {output.genome_bed}.tmp > {output.genome_bed}
+bedToBigBed -type=bed12 {output.genome_bed} {input.size} {output.genome_bb}
+rm {output.genome_bed}.tmp
+        """ 
+
+rule fetch_pfam_sequence:
+    input:
+        bed = rules.pfam2bed.output.genome_bed,
+        genome = rules.build_genome_info.output.genome,
+    output:
+        fa = os.path.join("analysis", "Pfam", "{species}", "{database}", "{ref}", "Pfam.genome.fa"),
+    params:
+        job_name = "fetch_pfam_sequence",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+    shell:
+        r"""
+bedtools getfasta -split -fullHeader -name+ -s -fi {input.genome} -bed {input.bed} -fo {output.fa}
+        """
+
+rule signalp:
+    input:
+        cds_faa = rules.build_gene_ref_info.output.cds_faa,
+    output:
+        res = os.path.join("analysis", "signalP", "{species}", "{database}", "{ref}", "signalP.out"),
+    params:
+        job_name = "signalp",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+        signalp = "/home/wangdehe/downloads/signalp-4.1/signalp",
+    shell:
+        """
+{params.signalp} -t euk -f all {input.cds_faa} > {output.res}
+        """
+
+rule signalp2bed:
+    input:
+        res = rules.signalp.output.res,
+        cds = rules.build_gene_ref_info.output.cds_bed12,
+        size = rules.build_genome_info.output.chromSize,
+    output:
+        genome_bed = os.path.join("analysis", "signalP", "{species}", "{database}", "{ref}", "signalP.genome.bed12"),
+        genome_bb = os.path.join("analysis", "signalP", "{species}", "{database}", "{ref}", "signalP.genome.bb12"),
+        cds_bed = os.path.join("analysis", "signalP", "{species}", "{database}", "{ref}", "signalP.cds.bed6"),
+    params:
+        job_name = "signalp2bed",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+        summary_signalp_results = "python scripts/prot_domain/summary_signalp_results.py",
+    shell:
+        """
+export LC_COLLATE=C
+source activate py35
+{params.summary_signalp_results} -i {input.res} -r {input.cds} --out-genome {output.genome_bed}.tmp --out-cds {output.cds_bed}
+sort -S 2G -k 1,1 -k 2,2n -k 3,3n {output.genome_bed}.tmp > {output.genome_bed}
+bedToBigBed -type=bed12 {output.genome_bed} {input.size} {output.genome_bb}
+rm {output.genome_bed}.tmp
+        """ 
+
+rule fetch_signalp_sequence:
+    input:
+        bed = rules.signalp2bed.output.genome_bed,
+        genome = rules.build_genome_info.output.genome,
+    output:
+        fa = os.path.join("analysis", "signalP", "{species}", "{database}", "{ref}", "signalP.genome.fa"),
+    params:
+        job_name = "fetch_signalp_sequence",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+    shell:
+        r"""
+bedtools getfasta -split -fullHeader -name+ -s -fi {input.genome} -bed {input.bed} -fo {output.fa}
+        """
+
+rule TMHMM:
+    input:
+        cds_faa = rules.build_gene_ref_info.output.cds_faa,
+    output:
+        res = os.path.join("analysis", "TMHMM", "{species}", "{database}", "{ref}", "TMHMM.out"),
+    params:
+        job_name = "TMHMM",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+        work_folder = os.path.join("analysis", "TMHMM", "{species}", "{database}", "{ref}", "TMHMM_res"),
+        curDir = curDir,
+    shell:
+        """
+if [[ -e {params.work_folder} ]]; then
+    rm -r {params.work_folder}
+fi
+mkdir -p {params.work_folder}
+cd {params.work_folder}
+cat {params.curDir}/{input.cds_faa} | tmhmm > {params.curDir}/{output.res}
+mv TMHMM_*/* ./
+rm  -r TMHMM_*
+        """
+
+rule TMHMM2bed:
+    input:
+        res = rules.TMHMM.output.res,
+        cds = rules.build_gene_ref_info.output.cds_bed12,
+        size = rules.build_genome_info.output.chromSize,
+    output:
+        genome_bed = os.path.join("analysis", "TMHMM", "{species}", "{database}", "{ref}", "TMHMM.genome.bed12"),
+        genome_bb = os.path.join("analysis", "TMHMM", "{species}", "{database}", "{ref}", "TMHMM.genome.bb12"),
+        cds_bed = os.path.join("analysis", "TMHMM", "{species}", "{database}", "{ref}", "TMHMM.cds.bed12"),
+    params:
+        job_name = "TMHMM2bed",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+        summary_TMHMM_results = "python scripts/prot_domain/summary_TMHMM_results.py",
+    shell:
+        """
+export LC_COLLATE=C
+source activate py35
+{params.summary_TMHMM_results} -i {input.res} -r {input.cds} --out-genome {output.genome_bed}.tmp --out-cds {output.cds_bed}
+sort -S 2G -k 1,1 -k 2,2n -k 3,3n {output.genome_bed}.tmp > {output.genome_bed}
+bedToBigBed -type=bed12 {output.genome_bed} {input.size} {output.genome_bb}
+rm {output.genome_bed}.tmp
+        """ 
+
+rule fetch_TMHMM_sequence:
+    input:
+        bed = rules.TMHMM2bed.output.genome_bed,
+        genome = rules.build_genome_info.output.genome,
+    output:
+        fa = os.path.join("analysis", "TMHMM", "{species}", "{database}", "{ref}", "TMHMM.genome.fa"),
+    params:
+        job_name = "fetch_TMHMM_sequence",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+    shell:
+        r"""
+cat {input.bed} | grep -e "TMhelix" > {input.bed}.TM
+bedtools getfasta -split -fullHeader -name+ -s -fi {input.genome} -bed {input.bed}.TM -fo {output.fa}
+rm {input.bed}.TM
+        """
+
+rule iupred2a:
+    input:
+        cds_faa = rules.build_gene_ref_info.output.cds_faa,
+    output:
+        res = touch(os.path.join("analysis", "Iupred2A", "{species}", "{database}", "{ref}", "Iupred2A.flag")),
+    params:
+        job_name = "iupred2a",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+        outdir = os.path.join("analysis", "Iupred2A", "{species}", "{database}", "{ref}"),
+        IUPred_PATH = "python3 /home/wangdehe/downloads/iupred2a/iupred2a.py",
+    run:
+        from pybicl.io import SimpleFastaFile
+        import os
+        tmp_file = params.outdir+"tmp.fa"
+        fa = SimpleFastaFile(input.cds_faa, "r")
+        for rec in fa.load():
+            with open(tmp_file, "w") as f:
+                f.write(">{0}\n{1}\n".format(rec.name, rec.seq))
+            cmd = """
+source activate py35
+{IUPred_PATH} -a {cds_faa} short > {res}
+            """.format(IUPred_PATH=params.IUPred_PATH, cds_faa=tmp_file, res=os.path.join(params.outdir, "{0}.Iupred2A.out".format(rec.name)))
+            shell(cmd)
+        shell("rm {0}".format(tmp_file))
+
+rule prot_domain:
+    input:
+        expand_reference(rules.summary_interpro_scan.output.bb12),
+        expand_reference(rules.summary_cdd.output.genome_bb),
+        expand_reference(rules.fetch_pfam_sequence.output.fa),
+        expand_reference(rules.fetch_signalp_sequence.output.fa),
+        expand_reference(rules.fetch_TMHMM_sequence.output.fa),
+        expand_reference(rules.iupred2a.output.res),

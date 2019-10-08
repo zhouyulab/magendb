@@ -1,0 +1,151 @@
+import os
+curDir = os.getcwd()
+include: "AssembleInfo.sm.rules"
+
+rule tandem_repeat_trf:
+    input:
+        iso_fa = rules.build_gene_ref_info.output.iso_fa,
+    output:
+        tag = touch(os.path.join("analysis", "TandemRepeat", "{species}", "{database}", "{ref}", "trf.tag"))
+    params:
+        job_name = "tandem_repeat_trf",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+        out_folder = os.path.join("analysis", "TandemRepeat", "{species}", "{database}", "{ref}"),
+        input_abs = os.path.join(curDir, rules.build_gene_ref_info.output.iso_fa)
+    priority: 30
+    shell:
+        """
+source activate py35
+if [[ -e {params.out_folder} ]]; then
+    rm -rf {params.out_folder}
+fi
+mkdir -p {params.out_folder}
+cd {params.out_folder}
+trf {params.input_abs} 2 7 7 80 10 50 1000
+        """
+
+rule summary_tandem_repeat_trf:
+    input:
+        rules.tandem_repeat_trf.output,
+        iso = rules.build_gene_ref_info.output.bed12,
+        size = rules.build_genome_info.output.chromSize,
+    output:
+        bed12 = os.path.join("analysis", "TandemRepeat", "{species}", "{database}", "{ref}.trf.bed12"),
+        bb12 = os.path.join("analysis", "TandemRepeat", "{species}", "{database}", "{ref}.trf.bb12"),
+        stat = os.path.join("analysis", "TandemRepeat", "{species}", "{database}", "{ref}.trf.stat.tsv"),
+    params:
+        job_name = "summary_tandem_repeat_trf",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+        res_folder = os.path.join("analysis", "TandemRepeat", "{species}", "{database}", "{ref}"),
+        work_folder = os.path.join("analysis", "TandemRepeat", "{species}", "{database}")
+    priority: 100
+    shell:
+        r"""
+export LC_COLLATE=C
+source activate py35
+trf2bed12 --trf {params.res_folder} --iso {input.iso} -o {output.bed12}.tmp --stat {output.stat}
+sort -S 2G -k 1,1 -k 2,2n {output.bed12}.tmp > {output.bed12}
+rm {output.bed12}.tmp
+bedToBigBed -type=bed12 {output.bed12} {input.size} {output.bb12}
+        """
+
+rule fetch_tandem_repeat_sequence:
+    input:
+        bed = rules.summary_tandem_repeat_trf.output.bed12,
+        genome = rules.build_genome_info.output.genome,
+    output:
+        fa = os.path.join("analysis", "TandemRepeat", "{species}", "{database}", "{ref}.trf.fa"),
+    params:
+        job_name = "fetch_tandem_repeat_sequence",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+    shell:
+        r"""
+bedtools getfasta -split -fullHeader -name+ -s -fi {input.genome} -bed {input.bed} -fo {output.fa}
+        """
+
+rule scan_rg4_qgrs:
+    input:
+        iso_fa = rules.build_gene_ref_info.output.iso_fa,
+    output:
+        res = os.path.join("analysis", "RG4", "{species}", "{database}", "{ref}", "qgrs.out"),
+    params:
+        job_name = "scan_rg4_qgrs",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "all",
+    run:
+        from pybicl.io import SimpleFastaFile
+        from pybicl.utils import ShellCMD
+        import re
+        utr_fa = SimpleFastaFile(input.iso_fa, "r")
+        with open(output.res, "w") as f:
+            for rec in utr_fa.load():
+                if rec.seq.find("G"*10) != -1:
+                    continue
+                cmd = """ echo "{0}" | qgrs -notitle """.format(rec.seq)
+                res = ShellCMD.exec(cmd)
+                for line in res:
+                    line = line.decode()
+                    if line=="\n":
+                        continue
+                    data = re.findall(re.compile("(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\w+)"), line)[0]
+                    f.write(rec.name+"\t"+"\t".join(data) + "\n")
+
+rule summary_rg4_qgrs:
+    input:
+        iso = rules.build_gene_ref_info.output.bed12,
+        qgrs_res = rules.scan_rg4_qgrs.output.res,
+        size = rules.build_genome_info.output.chromSize,
+    output:
+        rg4_bed = os.path.join("analysis", "RG4", "{species}", "{database}", "{ref}", "qgrs.bed12"),
+        rg4_bb = os.path.join("analysis", "RG4", "{species}", "{database}", "{ref}", "qgrs.bb12"),
+    params:
+        job_name = "summary_rg4_qgrs",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "all",
+        min_loop_len = 1,
+        min_rg4_len = 3,
+        summary_utr_scan_rg4_qgrs = "python3 scripts/trans_domain/summary_utr_scan_rg4_qgrs.py",
+    shell:
+        """
+export LC_COLLATE=C
+source activate py35
+{params.summary_utr_scan_rg4_qgrs} -i {input.qgrs_res} -r {input.iso} -o {output.rg4_bed}.tmp --min-loop-len {params.min_loop_len} --min-rg4-len {params.min_rg4_len}
+cat {output.rg4_bed}.tmp | sort -k 1,1 -k 2,2n > {output.rg4_bed}
+rm {output.rg4_bed}.tmp
+bedToBigBed -type=bed12 {output.rg4_bed} {input.size} {output.rg4_bb}
+        """
+
+rule fetch_rg4_sequence:
+    input:
+        bed = rules.summary_rg4_qgrs.output.rg4_bed,
+        genome = rules.build_genome_info.output.genome,
+    output:
+        fa = os.path.join("analysis", "RG4", "{species}", "{database}", "{ref}", "qgrs.fa"),
+    params:
+        job_name = "fetch_rg4_sequence",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+    shell:
+        r"""
+bedtools getfasta -split -fullHeader -name+ -s -fi {input.genome} -bed {input.bed} -fo {output.fa}
+        """
+
+rule trans_domain:
+    input:
+        expand_reference(rules.fetch_tandem_repeat_sequence.output.fa),
+        expand_reference(rules.fetch_rg4_sequence.output.fa),

@@ -1,0 +1,37 @@
+# pfam_scan.pl,  run at Thu Aug 23 13:18:42 2018
+#
+# Copyright (c) 2009 Genome Research Ltd
+# Freely distributed under the GNU 
+# General Public License
+#
+# Authors: Jaina Mistry (jaina@ebi.ac.uk), 
+#          Rob Finn (rdf@ebi.ac.uk)
+#
+# This is free software; you can redistribute it and/or modify it under
+# the terms of the GNU General Public License as published by the Free Software
+# Foundation; either version 2 of the License, or (at your option) any later version.
+# This program is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+# FOR A PARTICULAR PURPOSE. See the GNU General Public License for more
+# details.
+#
+# You should have received a copy of the GNU General Public License along with
+# this program. If not, see <http://www.gnu.org/licenses/>. 
+# = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =
+#      query sequence file: gosSpp2_gene_info/latest/igia.iso.cds.faa
+#        searching against: /home/wangdehe/downloads/PfamScan/data/Pfam-A.hmm, with cut off --cut_ga
+#    resolve clan overlaps: on
+#     predict active sites: off
+# = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =
+#
+# <seq id> <alignment start> <alignment end> <envelope start> <envelope end> <hmm acc> <hmm name> <type> <hmm start> <hmm end> <hmm length> <bit score> <E-value> <significance> <clan>
+
+Ga01g00002.F1_CDS      42    256     12    256 PF03062.18  MBOAT             Family   129   348   348    119.3   2.2e-34   1 CL0517   
+Ga01g00004.F1_CDS       5     69      3     69 PF03108.14  DBD_Tnp_Mut       Family     3    67    67     83.1   9.2e-24   1 CL0274   
+Ga01g00004.F1_CDS     209    295    201    298 PF10551.8   MULE              Domain    10    93    96     57.5   1.3e-15   1 CL0219   
+Ga01g00004.F1_CDS     445    478    429    480 PF04434.16  SWIM              Domain     8    38    40     41.0     1e-10   1 No_clan  
+Ga01g00004.F2_CDS       5     69      3     69 PF03108.14  DBD_Tnp_Mut       Family     3    67    67     83.1   9.2e-24   1 CL0274   
+Ga01g00004.F2_CDS     209    295    201    298 PF10551.8   MULE              Domain    10    93    96     57.5   1.3e-15   1 CL0219   
+Ga01g00004.F2_CDS     445    478    429    480 PF04434.16  SWIM              Domain     8    38    40     41.0     1e-10   1 No_clan  
+Ga01g00005.F1_CDS       1     70      1     70 PF08583.9   Cmc1              Family     1    69    69     56.8   1.6e-15   1 CL0351   
+Ga01g00009.F1_CDS     141    295    139    303 PF01734.21  Patatin           Family     3   196   204     39.7   5.3e-10   1 CL0323   

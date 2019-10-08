@@ -1,0 +1,188 @@
+import os
+curDir = os.getcwd()
+include: "AssembleInfo.sm.rules"
+
+rule plant2at:
+    input:
+        cds_faa = rules.build_gene_ref_info.output.cds_faa,
+    output:
+        blast_out = os.path.join("analysis", "Plant2At", "{species}", "{database}", "{ref}", "plant2at.out"),
+    params:
+        job_name = "plant2at",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=14",
+        log = "log",
+        queue = "All",
+        blast_db="/home/wangdehe/common/tair/blastdb/Araport11_pep",
+    shell:
+        """
+blastp -query {input} -out {output.blast_out} -db {params.blast_db} -evalue 1e-6 -outfmt 5 -num_threads 28
+        """
+
+rule summary_plant2at:
+    input:
+        res = rules.plant2at.output.blast_out,
+        cds = rules.build_gene_ref_info.output.cds_bed12,
+        size = rules.build_genome_info.output.chromSize,
+    output:
+        cds_stat = os.path.join("analysis", "Plant2At", "{species}", "{database}", "{ref}", "plant2at.cds.tsv"),
+        genome_bed = os.path.join("analysis", "Plant2At", "{species}", "{database}", "{ref}", "plant2at.genome.bed12"),
+        genome_bb = os.path.join("analysis", "Plant2At", "{species}", "{database}", "{ref}", "plant2at.genome.bb12"),
+    params:
+        job_name = "summary_plant2at",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "fat",
+        summary_blast_out = "python scripts/gene_annotation/summary_blast_out.py",
+    shell:
+        """
+export LC_COLLATE=C
+source activate py35
+{params.summary_blast_out} -i {input.res} -o {output.cds_stat}
+blast2bed12 --blast-out {input.res} --ref {input.cds} -o {output.genome_bed}.tmp --mode query
+sort -S 2G -k 1,1 -k 2,2n -k 3,3n {output.genome_bed}.tmp > {output.genome_bed}
+bedToBigBed -type=bed12 {output.genome_bed} {input.size} {output.genome_bb}
+rm {output.genome_bed}.tmp
+        """ 
+
+rule summary_plant2at_tmp:
+    input:
+        expand_reference(rules.summary_plant2at.output.genome_bb),
+
+rule nr_prot_blast:
+    input:
+        cds_faa = os.path.join("analysis", "genomeInfo", "{species}", "{database}", "{ref}", "split_faa", "{i}.fa"),
+    output:
+        blast_out = os.path.join("analysis", "NR", "{species}", "{database}", "{ref}", "out", "nr.{i}.prot.out"),
+    params:
+        job_name = "nr_prot_blast",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=4",
+        log = "log",
+        queue = "All",
+        blast_db="/home/wangdehe/common/blastdb/nr",
+    priority: 30
+    shell:
+        "blastp -query {input.cds_faa} -out {output.blast_out} -db {params.blast_db} -evalue 1e-6 -outfmt 5 -num_threads 4"
+
+rule summary_nr_prot:
+    input:
+        res = [os.path.join("analysis", "NR", "{{species}}", "{{database}}", "{{ref}}", "out", "nr.{i}.prot.out").format(i=indx) for indx in range(SPLIT_NUM)],
+        cds = rules.build_gene_ref_info.output.cds_bed12,
+        size = rules.build_genome_info.output.chromSize,
+    output:
+        cds_stat = os.path.join("analysis", "NR", "{species}", "{database}", "{ref}", "nr.prot.cds.tsv"),
+        genome_bed = os.path.join("analysis", "NR", "{species}", "{database}", "{ref}", "nr.prot.genome.bed12"),
+        genome_bb = os.path.join("analysis", "NR", "{species}", "{database}", "{ref}", "nr.prot.genome.bb12"),
+    params:
+        job_name = "summary_nr_prot",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "fat",
+        summary_blast_out = "python scripts/gene_annotation/summary_blast_out.py",
+    shell:
+        r"""
+export LC_COLLATE=C
+source activate py35
+{params.summary_blast_out} -i {input.res} -o {output.cds_stat}
+blast2bed12 --blast-out {input.res} --ref {input.cds} -o {output.genome_bed}.tmp --mode query
+sort -S 2G -k 1,1 -k 2,2n -k 3,3n {output.genome_bed}.tmp | awk '{{FS=OFS="\t"}}{{$5=0; print $0}}' > {output.genome_bed}
+bedToBigBed -type=bed12 {output.genome_bed} {input.size} {output.genome_bb}
+rm {output.genome_bed}.tmp
+        """ 
+
+rule summary_nr_tmp:
+    input:
+        expand_reference(rules.summary_nr_prot.output.cds_stat),
+
+rule nt_nucl_blast:
+    input:
+        iso_fa = rules.build_gene_ref_info.output.iso_fa,
+    output:
+        blast_out = os.path.join("analysis", "NT", "{species}", "{database}", "{ref}", "nt.nucl.out"),
+    params:
+        job_name = "nt_nucl_blast",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=14",
+        log = "log",
+        queue = "All",
+        blast_db="/home/wangdehe/common/blastdb/nt",
+    priority: 30
+    shell:
+        "blastn -query {input.iso_fa} -out {output.blast_out} -db {params.blast_db} -evalue 1e-6 -outfmt 5 -num_threads 28"
+
+rule summary_nt_nucl:
+    input:
+        res = rules.nt_nucl_blast.output.blast_out,
+        iso = rules.build_gene_ref_info.output.bed12,
+        size = rules.build_genome_info.output.chromSize,
+    output:
+        iso_stat = os.path.join("analysis", "NT", "{species}", "{database}", "{ref}", "nt.nucl.iso.tsv"),
+        genome_bed = os.path.join("analysis", "NT", "{species}", "{database}", "{ref}", "nt.nucl.genome.bed12"),
+        genome_bb = os.path.join("analysis", "NT", "{species}", "{database}", "{ref}", "nt.nucl.genome.bb12"),
+    params:
+        job_name = "summary_nt_nucl",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "fat",
+        summary_blast_out = "python scripts/gene_annotation/summary_blast_out.py",
+    shell:
+        r"""
+export LC_COLLATE=C
+source activate py35
+{params.summary_blast_out} -i {input.res} -o {output.iso_stat}
+blast2bed12 --blast-out {input.res} --ref {input.iso} -o {output.genome_bed}.tmp --mode query
+sort -S 2G -k 1,1 -k 2,2n -k 3,3n {output.genome_bed}.tmp | awk '{{FS=OFS="\t"}}{{$5=0; print $0}}' > {output.genome_bed}
+bedToBigBed -type=bed12 {output.genome_bed} {input.size} {output.genome_bb}
+rm {output.genome_bed}.tmp
+        """ 
+
+rule summary_nt_nucl_tmp:
+    input:
+        expand_reference(rules.summary_nt_nucl.output.iso_stat),
+
+rule tf_family_blast:
+    input:
+        rules.build_gene_ref_info.output.cds_faa,
+    output:
+        blast_out = os.path.join("analysis", "TF_family", "{species}", "{database}", "{ref}", "tf_family.blast.out"),
+    params:
+        job_name = "tf_family_blast",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=14",
+        log = "log",
+        queue = "All",
+        blast_db="/home/wangdehe/common/PlantTFDB/tf_protein_sequence/All/PlantTFDB",
+    shell:
+        """
+blastp -query {input} -out {output.blast_out} -db {params.blast_db} -evalue 1e-6 -outfmt 5 -num_threads 28
+        """
+
+rule summary_tf_family_blast:
+    input:
+        blast_out = rules.tf_family_blast.output.blast_out,
+    output:
+        blast_res = os.path.join("analysis", "TF_family", "{species}", "{database}", "{ref}", "tf_family.blast.tsv"),
+    params:
+        job_name = "summary_tf_family_blast",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "fat",
+        hsp_ratio = 0.7,
+        parse_planttfdb_blast_res = "python scripts/gene_annotation/parse_planttfdb_blast_res.py",
+    shell:
+        """
+source activate py35
+{params.parse_planttfdb_blast_res} -i {input.blast_out} -o {output.blast_res} --hsp-ratio {params.hsp_ratio}
+        """
+
+rule gene_annotation:
+    input:
+        expand_reference(rules.summary_plant2at.output.genome_bb),
+        expand_reference(rules.summary_nr_prot.output.genome_bb),
+        expand_reference(rules.summary_nt_nucl.output.genome_bb),
+        expand_reference(rules.summary_tf_family_blast.output.blast_res),

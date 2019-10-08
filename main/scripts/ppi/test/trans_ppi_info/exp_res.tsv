@@ -1,0 +1,4 @@
+ori_prot1	ori_prot2	prot1	prot2	combined_score
+P1_1	P1_2	A1_1	A1_2	10
+P2_1	P2_2	A2_1	A2_2	15
+P2_3	P2_4	A2_1	A2_2	17

@@ -1,0 +1,162 @@
+import os
+curDir = os.getcwd()
+
+######################
+#                    #
+#      Genome        #
+#                    #
+######################
+SPLIT_NUM = 100
+SPECIES = ["bomCei", "durZib", "gosArb", "gosBar", "gosHir", "gosRai", "theCac", "herUmb", "corCap", "corOli"]
+GENOME = {
+    "bomCei": [{"genome": "gigadb", "reference": ["gigadb"]}],
+    "durZib": [{"genome": "ncbi_1.0", "reference": ["ncbi_1.0"]}],
+    "gosArb": [{"genome": "CGP", "reference": ["IGIA", "CGP"]}],
+    "gosBar": [{"genome": "HAU_v2.0", "reference": ["HAU_v1.0"]}],
+    "gosHir": [
+        {"genome": "JGI_1.1", "reference": ["JGI_1.1"]},
+        {"genome": "BGI_1.0", "reference": ["BGI_1.0"]},
+        ],
+    "gosRai": [
+        {"genome": "JGI_v2.0", "reference": ["JGI_v2.1"]},
+        {"genome": "BGI_CGP_1.0", "reference": ["BGI_CGP_1.0"]},
+        ],
+    "theCac": [{"genome": "cocoa_v2", "reference": ["cocoa_v2"]}],
+    "herUmb": [{"genome": "ASM216827v2", "reference": ["ASM216827v2"]}],
+    "corCap": [{"genome": "CCACVL1_1.0", "reference": ["CCACVL1_1.0"]}],
+    "corOli": [{"genome": "COLO4_1.0", "reference": ["COLO4_1.0"]}],
+}
+
+def get_genome_name(species):
+    return [x["genome"] for x in GENOME[species]]
+
+def get_genome_file(species, database):
+    return os.path.join("data", "genome", species, "{0}_{1}.fa".format(species, database))
+
+def get_ref_name(species, database):
+    for data in GENOME[species]:
+        if data["genome"] == database:
+            return data["reference"]
+
+def get_ref_file(species, ref):
+    return os.path.join("data", "genome", species, "{0}_{1}.gff3".format(species, ref))
+
+def expand_genome(ruleStr):
+    res = list()
+    for species in SPECIES:
+        for genome in get_genome_name(species):
+            res.append(ruleStr.format(species=species, database=genome))
+    return res
+
+def expand_reference(ruleStr, species=None, genome=None):
+    res = list()
+    if species is None:
+        for tmp_species in SPECIES:
+            for tmp_genome in get_genome_name(tmp_species):
+                for ref in get_ref_name(tmp_species, tmp_genome):
+                    res.append(ruleStr.format(species=tmp_species, database=tmp_genome, ref=ref))
+    else:
+        if genome is None:
+            for tmp_genome in get_genome_name(species):
+                for ref in get_ref_name(species, tmp_genome):
+                    res.append(ruleStr.format(species=species, database=tmp_genome, ref=ref))
+        else:
+            for ref in get_ref_name(species, genome):
+                res.append(ruleStr.format(species=species, database=genome, ref=ref))
+    return res
+
+def expand_pair_reference(ruleStr, species=None, genome=None):
+    res = list()
+    key = list()
+    for tmp_species in SPECIES:
+        for tmp_genome in get_genome_name(tmp_species):
+            for tmp_ref in get_ref_name(tmp_species, tmp_genome):
+                key.append((tmp_species, tmp_genome, tmp_ref))
+    for species1, genome1, ref1 in key:
+        for species2, genome2, ref2 in key:
+            if species is not None:
+                if (species1 != species) and (species2 != species):
+                    continue
+            if genome is not None:
+                if (genome1 != genome) and (genome2 != genome):
+                    continue
+            res.append(ruleStr.format(species=species1, database=genome1, ref=ref1, species_q=species2, database_q=genome2, ref_q=ref2))
+    return res
+
+
+#################
+
+SPECIES_WITHOUT_GENE_ANN = ["hibSyr", "kokDry", "gosKir"]
+GENOME_WITHOUT_GENE_ANN = {
+    "hibSyr": ["ASM638163v1"],
+    "kokDry": ["KokDry1"],
+    "gosKir": ["ASM561035v1"]
+}
+
+def expand_genome_without_gene_ann(ruleStr):
+    res = list()
+    for species in SPECIES_WITHOUT_GENE_ANN:
+        for genome in GENOME_WITHOUT_GENE_ANN[species]:
+            res.append(ruleStr.format(species=species, database=genome))
+    return res
+
+######################
+#                    #
+#        HiC         #
+#                    #
+######################
+
+HIC_DATA = {
+    "gosArb": {"leaves":["SRX3051297"]},
+    "gosBar": {"leaves":["SRX3050040"]},
+    "gosRai": {"leaves":["SRX3051289"]},
+}
+
+HIC_RESOLUTION = [50000, 100000, 200000, 500000, 1000000]
+
+def find_hic_folder(species, tissue):
+    return os.path.join("data", "HiC", species, tissue)
+
+def expand_hic(ruleStr):
+    res = list()
+    for species, tis_dict in sorted(HIC_DATA.items()):
+        for database in get_genome_name(species):
+            for tissue, sample_li in sorted(tis_dict.items()):
+                for sample in sample_li:
+                    for resolution in HIC_RESOLUTION:
+                        res.append(ruleStr.format(species=species, database=database, tissue=tissue, sample=sample, resolution=resolution))
+    return res
+
+
+######################
+#                    #
+#      String        #
+#                    #
+######################
+
+STRING_DB = {
+    "gosRai": 29730,
+    "theCac": 3641,
+    "araTha": 3702,
+}
+
+def find_string_blast_db(species):
+    return os.path.join("/home/wangdehe/common/string", species, "At")
+
+def find_string_faa(species):
+    return os.path.join("/home/wangdehe/common/string", species, "{tid}.protein.sequences.v11.0.fa".format(tid=STRING_DB[species]))
+
+def find_string_mcscan_gff(species):
+    return os.path.join("/home/wangdehe/common/string", species, "mcscan2.gff")
+
+def find_string_ppi(species):
+    return os.path.join("/home/wangdehe/common/string", species, "{tid}.protein.links.v11.0.txt".format(tid=STRING_DB[species]))
+
+def expand_ppi(ruleStr):
+    res = list()
+    for species in SPECIES:
+        for genome in get_genome_name(species):
+            for ref in get_ref_name(species, genome):
+                for string_species in sorted(STRING_DB.keys()):
+                    res.append(ruleStr.format(species=species, database=genome, ref=ref, string_species=string_species))
+    return res

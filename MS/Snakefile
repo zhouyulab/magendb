@@ -1,0 +1,12 @@
+import os
+
+include: "SnakeConvertMGF.py"
+include: "SnakeMSSearch.py"
+include: "SnakeFigure.py"
+
+
+rule all:
+    input:
+        #rules.ConvertMGF.input,
+        rules.MSSearch.input,
+        rules.Figure.input,

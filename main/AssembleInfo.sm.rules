@@ -1,0 +1,195 @@
+import os
+curDir = os.getcwd()
+include: "MetaInfo.sm.rules"
+
+
+rule build_genome_info:
+    input:
+        genome = lambda wildcards: get_genome_file(wildcards.species, wildcards.database)
+    output:
+        genome = os.path.join("analysis", "genomeInfo", "{species}", "{database}", "genome.fa"),
+        twoBit = os.path.join("analysis", "genomeInfo", "{species}", "{database}", "genome.2bit"),
+        chromSize = os.path.join("analysis", "genomeInfo", "{species}", "{database}", "chrom.size"),
+    params:
+        job_name = "build_genome_info",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+    shell:
+        """
+cp {input.genome} {output.genome}
+faToTwoBit {output.genome} {output.twoBit}
+twoBitInfo {output.twoBit} {output.chromSize}
+        """
+
+rule build_gene_ref_info:
+    input:
+        twoBit = rules.build_genome_info.output.twoBit,
+        gff = lambda wildcards: get_ref_file(wildcards.species, wildcards.ref),
+        size = rules.build_genome_info.output.chromSize,
+    output:
+        gff = os.path.join("analysis", "genomeInfo", "{species}", "{database}", "{ref}", "gene.gff3"),
+        gtf = os.path.join("analysis", "genomeInfo", "{species}", "{database}", "{ref}", "gene.gtf"),
+        bed12 = os.path.join("analysis", "genomeInfo", "{species}", "{database}", "{ref}", "gene.bed12"),
+        bb12 = os.path.join("analysis", "genomeInfo", "{species}", "{database}", "{ref}", "gene.bb12"),
+        iso_fa = os.path.join("analysis", "genomeInfo", "{species}", "{database}", "{ref}", "isoform.fa"),
+        cds_bed12 = os.path.join("analysis", "genomeInfo", "{species}", "{database}", "{ref}", "cds.bed12"),
+        cds_fa = os.path.join("analysis", "genomeInfo", "{species}", "{database}", "{ref}", "cds.fa"),
+        cds_faa = os.path.join("analysis", "genomeInfo", "{species}", "{database}", "{ref}", "cds.faa"),
+    params:
+        job_name = "build_gene_ref_info",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+    shell:
+        """
+export LC_COLLATE=C
+source activate py35
+cp {input.gff} {output.gff}
+gffread {output.gff} -T -o {output.gtf}
+gtfToGenePred {output.gtf} {output.bed12}.gp
+genePredToBed {output.bed12}.gp {output.bed12}.tmp
+rm {output.bed12}.gp
+cat {output.bed12}.tmp | sort -k 1,1 -k 2,2n > {output.bed12}
+rm {output.bed12}.tmp
+bedToBigBed -type=bed12 {output.bed12} {input.size} {output.bb12}
+twoBitToFa -bed={output.bed12} {input.twoBit} {output.iso_fa}
+iso2cds -i {output.bed12} -o {output.cds_bed12}
+twoBitToFa -bed={output.cds_bed12} {input.twoBit} {output.cds_fa}
+translateFa -i {output.cds_fa} -o {output.cds_faa}
+        """
+
+rule split_faa_small:
+    input:
+        faa = rules.build_gene_ref_info.output.cds_faa,
+    output:
+        split_faa = [os.path.join("analysis", "genomeInfo", "{{species}}", "{{database}}", "{{ref}}", "split_faa", "{indx}.fa").format(indx=indx) for indx in range(SPLIT_NUM)],
+    params:
+        job_name = "split_faa",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+        file_num = SPLIT_NUM,
+        out_folder = os.path.join("analysis", "genomeInfo", "{species}", "{database}", "{ref}", "split_faa")
+    shell:
+        """
+source activate py35
+if [[ -e {params.out_folder} ]]; then
+    rm -rf {params.out_folder}
+fi
+mkdir {params.out_folder}
+SplitFa -i {input.faa} -o {params.out_folder} -N {params.file_num} -m FileNum
+        """
+
+
+rule merge_gene_locus:
+    input:
+        bed12 = lambda wildcards: expand_reference(rules.build_gene_ref_info.output.bed12, species=wildcards.species, genome=wildcards.database),
+    output:
+        gene_locus = os.path.join("analysis", "MergeGenomeInfo", "{species}", "{database}", "gene_locus.tsv"),
+        gene_locus_map = os.path.join("analysis", "MergeGenomeInfo", "{species}", "{database}", "gene_locus_map.tsv"),
+    params:
+        job_name = "merge_gene_locus",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+        tags = lambda wildcards: get_ref_name(wildcards.species, wildcards.database),
+        merge_gene_locus = "python scripts/assemble_info/merge_gene_locus.py",
+    shell:
+        """
+source activate py35
+{params.merge_gene_locus} -i {input.bed12} -t {params.tags} -s {wildcards.species} --gene-locus {output.gene_locus} --gene-locus-map {output.gene_locus_map}
+        """
+
+rule uniq_trans_info:
+    input:
+        bed12 = lambda wildcards: expand_reference(rules.build_gene_ref_info.output.bed12, species=wildcards.species, genome=wildcards.database),
+    output:
+        uniq_trans = os.path.join("analysis", "MergeGenomeInfo", "{species}", "{database}", "uniq.trans.bed12"),
+        uniq_trans_map = os.path.join("analysis", "MergeGenomeInfo", "{species}", "{database}", "uniq_trans_map.tsv"),
+    params:
+        job_name = "uniq_trans_info",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+        tags = lambda wildcards: get_ref_name(wildcards.species, wildcards.database),
+        uniq_bed12 = "python scripts/assemble_info/uniq_bed12.py",
+    shell:
+        """
+source activate py35
+{params.uniq_bed12} -i {input.bed12} -t {params.tags} --uniq {output.uniq_trans}.tmp --uniq-map {output.uniq_trans_map}
+cat {output.uniq_trans}.tmp | sort -k 1,1 -k 2,2n -k 3,3n > {output.uniq_trans}
+rm {output.uniq_trans}.tmp
+        """
+
+rule uniq_cds_info:
+    input:
+        cds = lambda wildcards: expand_reference(rules.build_gene_ref_info.output.cds_bed12, species=wildcards.species, genome=wildcards.database),
+    output:
+        uniq_cds = os.path.join("analysis", "MergeGenomeInfo", "{species}", "{database}", "uniq.cds.bed12"),
+        uniq_cds_map = os.path.join("analysis", "MergeGenomeInfo", "{species}", "{database}", "uniq_cds_map.tsv"),
+    params:
+        job_name = "uniq_cds_info",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+        tags = lambda wildcards: get_ref_name(wildcards.species, wildcards.database),
+        uniq_bed12 = "python scripts/assemble_info/uniq_bed12.py",
+    shell:
+        """
+source activate py35
+{params.uniq_bed12} -i {input.cds} -t {params.tags} --uniq {output.uniq_cds}.tmp --uniq-map {output.uniq_cds_map}
+cat {output.uniq_cds}.tmp | sort -k 1,1 -k 2,2n -k 3,3n > {output.uniq_cds}
+rm {output.uniq_cds}.tmp
+        """
+
+rule get_uniq_cds_faa:
+    input:
+        uniq_cds = rules.uniq_cds_info.output.uniq_cds,
+        twoBit = rules.build_genome_info.output.twoBit,
+    output:
+        cds_fa = os.path.join("analysis", "MergeGenomeInfo", "{species}", "{database}", "uniq.cds.fa"),
+        cds_faa = os.path.join("analysis", "MergeGenomeInfo", "{species}", "{database}", "uniq.cds.faa"),
+    params:
+        job_name = "get_uniq_cds_faa",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+    shell:
+        """
+source activate py35
+twoBitToFa -bed={input.uniq_cds} {input.twoBit} {output.cds_fa}
+translateFa -i {output.cds_fa} -o {output.cds_faa}
+        """
+
+rule build_bowtie2_index:
+    input:
+        genome = rules.build_genome_info.output.genome,
+    output:
+        flag = touch(os.path.join("analysis", "index", "bowtie2", "{species}", "{database}.flag")),
+    params:
+        job_name = "build_bowtie2_index",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "All",
+        db = os.path.join("analysis", "index", "bowtie2", "{species}", "{database}")
+    shell:
+        """
+bowtie2-build --threads 28 {input.genome} {params.db}
+        """
+
+rule assemble_info:
+    input:
+        expand_reference(rules.build_gene_ref_info.output.bed12),
+        expand_genome(rules.merge_gene_locus.output.gene_locus),
+        expand_genome(rules.uniq_trans_info.output.uniq_trans),
+        expand_genome(rules.get_uniq_cds_faa.output.cds_faa),
+        expand_genome(rules.build_bowtie2_index.output.flag),

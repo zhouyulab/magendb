@@ -1,0 +1,48 @@
+/home/wangdehe/package/tmhmm-2.0c/bin/decodeanhmm.Linux_x86_64 /home/wangdehe/package/tmhmm-2.0c/lib/TMHMM2.0.model -f /home/wangdehe/package/tmhmm-2.0c/lib/TMHMM2.0.options -plp# Ga01g00002.F1_CDS Length: 264
+# Ga01g00002.F1_CDS Number of predicted TMHs:  3
+# Ga01g00002.F1_CDS Exp number of AAs in TMHs: 87.1626100000001
+# Ga01g00002.F1_CDS Exp number, first 60 AAs:  9.76596
+# Ga01g00002.F1_CDS Total prob of N-in:        0.17421
+Ga01g00002.F1_CDS	TMHMM2.0	inside	     1   103
+Ga01g00002.F1_CDS	TMHMM2.0	TMhelix	   104   126
+Ga01g00002.F1_CDS	TMHMM2.0	outside	   127   194
+Ga01g00002.F1_CDS	TMHMM2.0	TMhelix	   195   217
+Ga01g00002.F1_CDS	TMHMM2.0	inside	   218   237
+Ga01g00002.F1_CDS	TMHMM2.0	TMhelix	   238   260
+Ga01g00002.F1_CDS	TMHMM2.0	outside	   261   264
+# Ga01g00004.F1_CDS Length: 594
+# Ga01g00004.F1_CDS Number of predicted TMHs:  0
+# Ga01g00004.F1_CDS Exp number of AAs in TMHs: 16.08388
+# Ga01g00004.F1_CDS Exp number, first 60 AAs:  0.00043
+# Ga01g00004.F1_CDS Total prob of N-in:        0.67051
+Ga01g00004.F1_CDS	TMHMM2.0	outside	     1   594
+# Ga01g00004.F2_CDS Length: 594
+# Ga01g00004.F2_CDS Number of predicted TMHs:  0
+# Ga01g00004.F2_CDS Exp number of AAs in TMHs: 16.08388
+# Ga01g00004.F2_CDS Exp number, first 60 AAs:  0.00043
+# Ga01g00004.F2_CDS Total prob of N-in:        0.67051
+Ga01g00004.F2_CDS	TMHMM2.0	outside	     1   594
+# Ga01g00005.F1_CDS Length: 81
+# Ga01g00005.F1_CDS Number of predicted TMHs:  0
+# Ga01g00005.F1_CDS Exp number of AAs in TMHs: 0
+# Ga01g00005.F1_CDS Exp number, first 60 AAs:  0
+# Ga01g00005.F1_CDS Total prob of N-in:        0.12750
+Ga01g00005.F1_CDS	TMHMM2.0	outside	     1    81
+# Ga01g00006.F1_CDS Length: 147
+# Ga01g00006.F1_CDS Number of predicted TMHs:  0
+# Ga01g00006.F1_CDS Exp number of AAs in TMHs: 0.0002
+# Ga01g00006.F1_CDS Exp number, first 60 AAs:  0
+# Ga01g00006.F1_CDS Total prob of N-in:        0.02046
+Ga01g00006.F1_CDS	TMHMM2.0	outside	     1   147
+# Ga01g00006.F2_CDS Length: 147
+# Ga01g00006.F2_CDS Number of predicted TMHs:  0
+# Ga01g00006.F2_CDS Exp number of AAs in TMHs: 0.0002
+# Ga01g00006.F2_CDS Exp number, first 60 AAs:  0
+# Ga01g00006.F2_CDS Total prob of N-in:        0.02046
+Ga01g00006.F2_CDS	TMHMM2.0	outside	     1   147
+# Ga01g00009.F1_CDS Length: 388
+# Ga01g00009.F1_CDS Number of predicted TMHs:  0
+# Ga01g00009.F1_CDS Exp number of AAs in TMHs: 4.12172
+# Ga01g00009.F1_CDS Exp number, first 60 AAs:  0.3356
+# Ga01g00009.F1_CDS Total prob of N-in:        0.06994
+Ga01g00009.F1_CDS	TMHMM2.0	outside	     1   388

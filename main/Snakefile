@@ -1,0 +1,26 @@
+import os
+curDir = os.getcwd()
+include: "MetaInfo.sm.rules"
+include: "AssembleInfo.sm.rules"
+include: "CodingScore.sm.rules"
+include: "ProtDomain.sm.rules"
+include: "ScanGenomeFeature.sm.rules"
+include: "ColinearGene.sm.rules"
+include: "TransDomain.sm.rules"
+include: "GeneAnnotation.sm.rules"
+include: "PPI.sm.rules"
+include: "HiC.sm.rules"
+
+
+rule all:
+    input:
+        rules.assemble_info.input,
+        rules.cpat.input,
+        rules.prot_domain.input,
+        rules.scan_genome_feature.input,
+        rules.colinear_gene.input,
+        rules.trans_domain.input,
+        rules.gene_annotation.input,
+        rules.ppi.input,
+        rules.hic.input,
+

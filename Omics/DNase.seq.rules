@@ -1,0 +1,391 @@
+import os
+
+# DNase-seq pipeline
+## Encode pipelines: https://www.encodeproject.org/pipelines/ENCPL202DNS/
+
+include: "Utils.rules"
+
+RNA_CFG = "DNase_seq.cfg"
+CurDir = os.getcwd()
+
+class RnaSeqCfg(object):
+    def __init__(self, line):
+        self.species, self.SRR, self.adapter5, self.adapter3, self.trim5, self.trim3, paired = line.rstrip().split("\t")
+        self.paired = paired == "TRUE"
+        self.rule = None
+
+    def get_raw_fastq(self):
+        if self.paired:
+            return [
+            "data/DNase_seq/fastq/{species}/{sample}_1.fastq.gz".format(species=self.species, sample=self.SRR), 
+            "data/DNase_seq/fastq/{species}/{sample}_2.fastq.gz".format(species=self.species, sample=self.SRR)
+            ]
+        else:
+            return [
+            "data/DNase_seq/fastq/{species}/{sample}.fastq.gz".format(species=self.species, sample=self.SRR)
+            ]
+
+    def get_clean_fastq(self):
+        if self.paired:
+            return [
+            "data/DNase_seq/clean/{species}/{sample}_1.fastq.gz".format(species=self.species, sample=self.SRR),
+            "data/DNase_seq/clean/{species}/{sample}_2.fastq.gz".format(species=self.species, sample=self.SRR)
+            ]
+        else:
+            return ["data/DNase_seq/clean/{species}/{sample}.fastq.gz".format(species=self.species, sample=self.SRR)]
+
+    def cutadapt_cmd(self, min_len=40):
+        raw_fq_li = self.get_raw_fastq()
+        clean_fq_li = self.get_clean_fastq()
+        cmd = ""
+
+        if any([self.adapter5, self.adapter3, self.trim5, self.trim3]):
+            if self.paired:
+                adp3 = ""
+                adp5 = ""
+                if self.adapter3:
+                    first_adp3, paired_adp3 = self.adapter3.split(",")
+                    adp3 = "-a {first_adp3} -A {paired_adp3}".format(first_adp3=first_adp3, paired_adp3=paired_adp3)
+                if self.adapter5:
+                    first_adp5, paired_adp5 = self.adapter5.split(",")
+                    adp5 = "-g {first_adp5} -G {paired_adp5}".format(first_adp5=first_adp5, paired_adp5=paired_adp5)
+
+                trim5 = ""
+                trim3 = ""
+                if self.trim5:
+                    first_trim5, paired_trim5 = self.trim5.split(",")
+                    trim5 = "-u {first_trim5} -U {paired_trim5}".format(first_trim5=first_trim5, paired_trim5=paired_trim5)
+                if self.trim3:
+                    first_trim3, paired_trim3 = self.trim3.split(",")
+                    trim3 = "-u -{first_trim3} -U -{paired_trim3}".format(first_trim3=first_trim3, paired_trim3=paired_trim3)
+
+
+                cmd = "cutadapt {adp3} {adp5} {trim5} {trim3} -m {min_len} -o {clean_R1} -p {clean_R2} {raw_R1} {raw_R2}".format(
+                    adp3=adp3, adp5=adp5, 
+                    trim5=trim5, trim3=trim3,
+                    min_len=min_len, 
+                    raw_R1=raw_fq_li[0],
+                    raw_R2=raw_fq_li[1],
+                    clean_R1=clean_fq_li[0],
+                    clean_R2=clean_fq_li[1]
+                    )
+            else:
+                adp3 = ""
+                adp5 = ""
+                if self.adapter3:
+                    adp3 = "-a " + self.adapter3
+                if self.adapter5:
+                    adp5 = "-g " + self.adapter5
+
+                trim5 = ""
+                trim3 = ""
+                if self.trim5:
+                    trim5 = "-u {trim5}".format(trim5=self.trim5)
+                if self.trim3:
+                    trim3 = "-u -{trim3}".format(trim3=self.trim3)
+                
+                cmd = "cutadapt {adp3} {adp5} {trim5} {trim3} -m {min_len} {raw_fq} -o {clean_fq} ".format(
+                    adp3=adp3, adp5=adp5, 
+                    trim5=trim5, trim3=trim3,
+                    min_len=min_len, 
+                    raw_fq=raw_fq_li[0],
+                    clean_fq=clean_fq_li[0]
+                    )
+        else:
+            for raw_fq, clean_fq in zip(raw_fq_li, clean_fq_li):
+                cmd += "ln -s {CurDir}/{raw_fq} {CurDir}/{clean_fq}\n".format(raw_fq=raw_fq, clean_fq=clean_fq, CurDir=CurDir)
+        return cmd
+
+def load_rna_seq_cfg(f_cfg):
+    cfg_li = list()
+    with open(f_cfg, "r") as f:
+        for indx, line in enumerate(f.readlines()):
+            if indx == 0:
+                continue
+            cfg_li.append(RnaSeqCfg(line))
+    return cfg_li
+
+cfg_rna_li = load_rna_seq_cfg(RNA_CFG)
+
+def find_cfg_by_srr(srr, cfg_rna_li):
+    for cfg in cfg_rna_li:
+        if cfg.SRR == srr:
+            return cfg
+    raise ValueError("Can not find configure about {0} !".format(srr))
+
+rule dnase_seq_qc:
+    input:
+        raw_fq = lambda wildcards: find_cfg_by_srr(wildcards.sample, cfg_rna_li).get_raw_fastq(),
+    output:
+        dir = directory("data/DNase_seq/fastqc/{species}/{sample}"),
+    params:
+        job_name = "dnase_seq_qc",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=4",
+        log = "log",
+        queue = "all",
+    shell:
+        """
+mkdir -p {output.dir}
+fastqc -t 4 -o {output.dir} {input.raw_fq}
+        """
+
+rule dnase_seq_cutadapt:
+    input:
+        raw_fq = lambda wildcards: find_cfg_by_srr(wildcards.sample, cfg_rna_li).get_raw_fastq(),
+    output:
+        flag = touch("data/DNase_seq/clean/{species}/{sample}.flag"),
+    params:
+        job_name = "dnase_seq_cutadapt",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "all",
+        cmd = lambda wildcards: find_cfg_by_srr(wildcards.sample, cfg_rna_li).cutadapt_cmd()
+    shell:
+        """
+{params.cmd}
+        """
+
+rule dnase_seq_clean_qc:
+    input:
+        cutadapt_flag = rules.dnase_seq_cutadapt.output.flag,
+    output:
+        dir = directory("data/DNase_seq/fastqc_clean/{species}/{sample}"),
+    params:
+        job_name = "dnase_seq_clean_qc",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=4",
+        log = "log",
+        queue = "all",
+        fq = lambda wildcards: find_cfg_by_srr(wildcards.sample, cfg_rna_li).get_clean_fastq(),
+    shell:
+        """
+mkdir -p {output.dir}
+fastqc -t 4 -o {output.dir} {params.fq}
+        """
+
+rule dnase_seq_clean_fq_stats:
+    input:
+        cutadapt_flag = rules.dnase_seq_cutadapt.output.flag,
+    output:
+        txt = "data/DNase_seq/clean_fq_stats/{species}/{sample}/fq_stats.txt",
+    params:
+        job_name = "dnase_seq_clean_fq_stats",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "all",
+        work_dir = "data/DNase_seq/clean_fq_stats/{species}/{sample}",
+        fq = lambda wildcards: find_cfg_by_srr(wildcards.sample, cfg_rna_li).get_clean_fastq(),
+    shell:
+        """
+if [[ -e {params.work_dir} ]]; then
+    rm -r {params.work_dir}
+fi
+mkdir -p {params.work_dir}
+sum_len=$(seqkit stats {params.fq} | sed 's/,//g' | awk '{{sum += $5}};END {{print sum/10^9}}')
+echo "{wildcards.sample}\t${{sum_len}}" > {output.txt}
+        """
+
+rule dnase_seq_clean_fq_reads:
+    input:
+        cutadapt_flag = rules.dnase_seq_cutadapt.output.flag,
+    output:
+        txt = "data/DNase_seq/clean_fq_stats/{species}/{sample}/fq_reads.txt",
+    params:
+        job_name = "dnase_seq_clean_fq_reads",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "all",
+        fq = lambda wildcards: find_cfg_by_srr(wildcards.sample, cfg_rna_li).get_clean_fastq(),
+    shell:
+        """
+sum_len=$(seqkit stats {params.fq} | sed 's/,//g' | awk '{{sum += $4}};END {{print sum}}')
+echo "{wildcards.sample}\t${{sum_len}}" > {output.txt}
+        """
+
+rule dnase_seq_mapping:
+    input:
+        cutadapt_flag = rules.dnase_seq_cutadapt.output.flag,
+        fa = "data/genomeInfo/{species}/{genome}/genome.fa",
+    output:
+        bam = "data/DNase_seq/bwa_mapping/{species}/{genome}/{sample}/{sample}.sort.bam",
+    params:
+        job_name = "dnase_seq_mapping",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=24",
+        log = "log",
+        queue = "all",
+        mapping_dir = "data/DNase_seq/bwa_mapping/{species}/{genome}/{sample}",
+        fq_1 = lambda wildcards: find_cfg_by_srr(wildcards.sample, cfg_rna_li).get_clean_fastq()[0],
+        fq_2 = lambda wildcards: find_cfg_by_srr(wildcards.sample, cfg_rna_li).get_clean_fastq()[1],
+        sai_1 = "data/DNase_seq/bwa_mapping/{species}/{genome}/{sample}/{sample}_1.sai",
+        sai_2 = "data/DNase_seq/bwa_mapping/{species}/{genome}/{sample}/{sample}_2.sai",
+        sam = "data/DNase_seq/bwa_mapping/{species}/{genome}/{sample}/{sample}.sam",
+    shell:
+        """
+if [[ -e {params.mapping_dir} ]]; then
+    rm -r {params.mapping_dir}
+fi
+mkdir -p {params.mapping_dir}
+bwa aln -Y -l 32 -n 0.04 -t 24 {input.fa} {params.fq_1} > {params.sai_1}
+bwa aln -Y -l 32 -n 0.04 -t 24 {input.fa} {params.fq_2} > {params.sai_2}
+bwa sampe -n 10 -a 750 {input.fa} {params.sai_1} {params.sai_2} {params.fq_1} {params.fq_2} > {params.sam}
+
+samtools sort -@ 24 -o {output.bam} {params.sam}
+rm {params.sam} {params.sai_1} {params.sai_2}
+        """
+
+rule dnase_rm_duplicate:
+    input:
+        bam = rules.dnase_seq_mapping.output.bam,
+    output:
+        rd_bam = "data/DNase_seq/bwa_mapping/{species}/{genome}/{sample}/rm_duplicate.bam",
+        metric = "data/DNase_seq/bwa_mapping/{species}/{genome}/{sample}/rm_duplicate.mat",
+    params:
+        job_name = "dnase_rm_duplicate",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "all",
+        tmp_dir = "data/DNase_seq/bwa_mapping/{species}/{genome}/{sample}/tmp",
+    shell:
+        """
+mkdir -p {params.tmp_dir}
+picard MarkDuplicates \
+    VALIDATION_STRINGENCY=LENIENT \
+    -Xms8g \
+    -Xmx8g \
+    I={input.bam} \
+    O={output.rd_bam} \
+    M={output.metric} \
+    ASSUME_SORTED=true \
+    REMOVE_DUPLICATES=true \
+    TMP_DIR={params.tmp_dir}
+
+samtools index {output.rd_bam}
+        """
+
+rule dnase_bam2bw:
+    input:
+        bam = rules.dnase_rm_duplicate.output.rd_bam,
+        merge_bed = rules.merge_genome_bed.output.merge_bed,
+        size = "data/genomeInfo/{species}/{genome}/chrom.size",
+    output:
+        flag = touch("data/DNase_seq/bw/{species}/{genome}/{sample}.flag"),
+    params:
+        job_name = "dnase_bam2bw",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "all",
+        total_sum = 1000000000,
+        work_dir = "data/DNase_seq/bw/{species}/{genome}",
+    shell:
+        """
+rule_text=$(infer_experiment.py -i {input.bam} -r {input.merge_bed} | grep -e "[+-]")
+
+indx=0
+for word in ${{rule_text[@]}}; do
+    let "indx = indx + 1"
+    if [[ ${{indx}} = 6 ]]; then
+        rule1=${{word:1:-2}}
+    elif [[ ${{indx}} = 7 ]]; then
+        score1=${{word}}
+    elif [[ ${{indx}} = 13 ]]; then
+        rule2=${{word:1:-2}}
+    elif [[ ${{indx}} = 14 ]]; then
+        score2=${{word}}
+    fi
+done
+
+if [[ `awk "BEGIN{{print(${{score1}}>${{score2}})?"1":"0"}}"` = 1 ]]; then
+    rule=${{rule1}}
+    score=${{score1}}
+    unrule_score=${{score2}}
+else
+    rule=${{rule2}}
+    score=${{score2}}
+    unrule_score=${{score1}}
+fi
+
+echo "file: {input.bam}  rule: ${{rule}}  score: ${{score}}"
+if [[ `awk "BEGIN{{print(${{score}}-${{unrule_score}}>0.3)?"1":"0"}}"` = 0 ]]; then
+    mode=all
+fi
+
+if [[ ${{mode}} = all ]]; then
+    bam2wig.py -t {params.total_sum} -s {input.size} -i {input.bam} -o {params.work_dir}/{wildcards.sample}
+    wigToBigWig -clip {params.work_dir}/{wildcards.sample}.wig {input.size} {params.work_dir}/{wildcards.sample}.bw
+    rm {params.work_dir}/{wildcards.sample}.wig
+else
+    bam2wig.py -t {params.total_sum} -s {input.size} -i {input.bam} -o {params.work_dir}/{wildcards.sample} -d "${{rule}}"
+    wigToBigWig -clip {params.work_dir}/{wildcards.sample}.Forward.wig {input.size} {params.work_dir}/{wildcards.sample}.Forward.bw
+    wigToBigWig -clip {params.work_dir}/{wildcards.sample}.Reverse.wig {input.size} {params.work_dir}/{wildcards.sample}.Reverse.bw
+    rm {params.work_dir}/{wildcards.sample}.Forward.wig {params.work_dir}/{wildcards.sample}.Reverse.wig
+fi
+        """
+
+rule dnase_call_peak_prepare:
+    input:
+        size = "data/genomeInfo/{species}/{genome}/chrom_size_chr.sort.bed",
+    output:
+        csites = "data/genomeInfo/{species}/{genome}/center_sites.starch",
+    params:
+        job_name = "dnase_call_peak_prepare",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "all",
+        total_sum = 1000000000,
+    shell:
+        """
+/home/guoxiaolong/CottonDB/Tools/hotspot2/scripts/extractCenterSites.sh -c {input.size} -o {output.csites}
+        """
+
+rule dnase_call_peak:
+    input:
+        bam = rules.dnase_rm_duplicate.output.rd_bam,
+        size = "data/genomeInfo/{species}/{genome}/chrom_size_chr.sort.bed",
+        csites = rules.dnase_call_peak_prepare.output.csites,
+    output:
+        flag = touch("data/DNase_seq/peak/{species}/{genome}/{sample}/{sample}.flag"),
+    params:
+        job_name = "dnase_call_peak",
+        walltime = "480:00:00",
+        nodes = "nodes=1:ppn=1",
+        log = "log",
+        queue = "all",
+        work_dir = "data/DNase_seq/peak/{species}/{genome}/{sample}",
+    shell:
+        """
+if [[ -e {params.work_dir} ]]; then
+    rm -r {params.work_dir}
+fi
+mkdir -p {params.work_dir}
+/home/guoxiaolong/CottonDB/Tools/hotspot2/scripts/hotspot2.sh \
+    -c {input.size} \
+    -C {input.csites} \
+    {input.bam} \
+    {params.work_dir}
+        """
+
+def expand_sample(ruleStr, cfg_rna_li, genome_cfg):
+    res_res = list()
+    for cfg in cfg_rna_li:
+        species = cfg.species
+        for genome in genome_cfg[species].keys():
+            res_res.append(ruleStr.format(species=species, sample=cfg.SRR, genome=genome))
+    return res_res
+
+rule dnase_seq:
+    input:
+        expand_sample(rules.dnase_seq_qc.output.dir, cfg_rna_li, genome_dict),
+        expand_sample(rules.dnase_seq_clean_qc.output.dir, cfg_rna_li, genome_dict),
+        expand_sample(rules.dnase_seq_clean_fq_stats.output.txt, cfg_rna_li, genome_dict),
+        expand_sample(rules.dnase_seq_clean_fq_reads.output.txt, cfg_rna_li, genome_dict),
+        expand_sample(rules.dnase_rm_duplicate.output.rd_bam, cfg_rna_li, genome_dict),
+        expand_sample(rules.dnase_bam2bw.output.flag, cfg_rna_li, genome_dict),
+        expand_sample(rules.dnase_call_peak.output.flag, cfg_rna_li, genome_dict)
