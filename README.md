@@ -1,9 +1,10 @@
-# MaGenDBDataProcessing
-This repository contains code for MaGenDB project data analysis.
+# Pipelines of data analysis for MaGenDB 
+
+This repository contains codes and pipelines in Snakemake for MaGenDB project.
 
 ## Content
 
-| Floder         | Author       | Description                               |
+| Folder         | Author       | Description                               |
 |:---------------|:-------------|:------------------------------------------|
 | main           | Dehe Wang    | Main analysis process                     |
 | PLAZA_colinear | Dehe Wang    | Analysis process for PLAZA colinear genes |
